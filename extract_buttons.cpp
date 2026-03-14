@@ -1,7 +1,6 @@
 #include <opencv2/opencv.hpp>
 #include <filesystem>
 #include <iostream>
-
 #include <string>
 
 #include "adb_screencap.hpp"
@@ -10,7 +9,7 @@ namespace fs = std::filesystem;
 int main(int argc, char** argv) {
     // Đường dẫn ảnh gốc: dùng trực tiếp file screenshot trong workspace Cursor
     // Bạn có thể copy file này vào thư mục project nếu muốn đường dẫn tương đối.
-    std::string inputImage = "images/main_screen.png";
+    std::string inputImage = "../images/main_screen.png";
     std::string outputDir  = "button_templates"; // thư mục con ngay trong project
 
     bool useAdb = false;

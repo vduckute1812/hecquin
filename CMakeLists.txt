@@ -26,10 +26,21 @@ add_executable(extract_buttons
 )
 target_link_libraries(extract_buttons PRIVATE ${OpenCV_LIBS})
 
+# Executable: tiền xử lý các template sau khi trích xuất
+add_executable(preprocess_buttons
+    preprocess_buttons.cpp
+)
+target_link_libraries(preprocess_buttons PRIVATE ${OpenCV_LIBS})
+
 # Executable: phát hiện vị trí nút trên ảnh
 add_executable(detect_buttons
     detect_buttons.cpp
     adb_screencap.cpp
 )
 target_link_libraries(detect_buttons PRIVATE ${OpenCV_LIBS})
+
+# Executable: click nut theo ten button trong detected_buttons.json
+add_executable(click_button
+    click_button.cpp
+)
 

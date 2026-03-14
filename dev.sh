@@ -18,7 +18,9 @@ Usage:
   ./dev.sh opencv:build
   ./dev.sh build
   ./dev.sh run extract_buttons
+  ./dev.sh run preprocess_buttons
   ./dev.sh run detect_buttons
+  ./dev.sh run click_button -- <button_name> [json_path]
 
 Notes:
   - OpenCV is built/installed locally under .env/
@@ -88,7 +90,9 @@ case "$cmd" in
       echo "Run: ./dev.sh build"
       exit 1
     fi
-    (cd "$PROJECT_BUILD_DIR" && "./$arg")
+    shift 2 || true
+    # Forward remaining args (if any) to the executable
+    (cd "$PROJECT_BUILD_DIR" && "./$arg" "$@")
     ;;
 
   *)
