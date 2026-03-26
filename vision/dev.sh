@@ -17,10 +17,6 @@ Usage:
   ./dev.sh opencv:clone
   ./dev.sh opencv:build
   ./dev.sh build
-  ./dev.sh run extract_buttons
-  ./dev.sh run preprocess_buttons
-  ./dev.sh run detect_buttons
-  ./dev.sh run click_button -- <button_name> [json_path]
 
 Notes:
   - OpenCV is built/installed locally under .env/
