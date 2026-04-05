@@ -38,7 +38,7 @@ cmd_run() {
   fi
 
   shift 2 || true
-  (cd "$PROJECT_BUILD_DIR" && "./$target" "$@")
+  (cd "$PROJECT_BUILD_DIR" && LD_LIBRARY_PATH="${WHISPER_INSTALL_DIR}/lib:${LD_LIBRARY_PATH:-}" "./$target" "$@")
 }
 
 cmd_env_info() {
