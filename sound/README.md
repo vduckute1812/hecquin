@@ -46,6 +46,7 @@ sound/
 │   ├── mac/
 │   └── rpi/
 └── .env/                    # Local dependencies (not in git)
+    ├── linux/               # Linux-specific installs
     ├── mac/                 # macOS binaries
     ├── rpi/                 # Raspberry Pi binaries
     └── shared/              # Shared resources
@@ -68,12 +69,12 @@ brew install cmake sdl2 espeak-ng
 
 **Ubuntu/Debian:**
 ```bash
-sudo apt install cmake libsdl2-dev espeak-ng
+sudo apt install build-essential cmake pkg-config git libsdl2-dev espeak-ng libespeak-ng-dev
 ```
 
 **Raspberry Pi:**
 ```bash
-sudo apt install cmake libsdl2-dev espeak-ng
+sudo apt install build-essential cmake pkg-config git libsdl2-dev espeak-ng libespeak-ng-dev
 ```
 
 ### 2. Setup Development Environment
@@ -119,7 +120,7 @@ cd sound
 
 ### Voice Detector (Speech Recognition)
 
-The voice detector captures audio from the default microphone for 5 seconds and transcribes it to text using Whisper.
+The voice detector listens on the default microphone, detects speech activity, and transcribes captured audio to text using Whisper.
 
 ```bash
 # Run with default model (ggml-base.bin)
@@ -129,7 +130,7 @@ The voice detector captures audio from the default microphone for 5 seconds and 
 **Configuration:**
 - Sample rate: 16 kHz (required by Whisper)
 - Channels: Mono
-- Recording duration: 5 seconds
+- Voice activity detection for automatic capture
 - Language: English (configurable in code)
 
 **Example output:**
@@ -140,14 +141,24 @@ Tìm thấy 1 thiết bị ghi âm:
   [0] MacBook Pro Microphone
 Audio device: 16000Hz, 1 channels, format=33056
 
-🎤 Bắt đầu ghi âm 5 giây... Nói gì đó!
-✅ Ghi âm xong! Đã thu 80000 samples (5 giây)
+🎤 Đang lắng nghe giọng nói...
+⏹ Ghi âm hoàn thành!
 
 🔍 Đang nhận diện giọng nói...
 
 📝 Kết quả:
-Robot heard: Hello, how are you today?
+  > Hello, how are you today?
 ```
+
+### Transcribe Existing Audio
+
+If you already have a WAV file, use Whisper directly:
+
+```bash
+./dev.sh transcribe audio.wav
+```
+
+This runs the locally built Whisper CLI with the default model.
 
 ### Text-to-Speech
 
@@ -163,6 +174,8 @@ Synthesize speech from text input using Piper TTS.
 # Use custom voice model
 ./dev.sh run text_to_speech -m custom_voice.onnx "Hello world"
 ```
+
+`./dev.sh speak` uses the built `text_to_speech` binary when available, and otherwise falls back to the installed Piper executable.
 
 **Command line options:**
 | Option | Description |
