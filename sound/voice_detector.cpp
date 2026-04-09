@@ -6,6 +6,7 @@
 #include <atomic>
 #include <thread>
 #include <chrono>
+#include <csignal>
 
 // Fallback nếu không được định nghĩa từ CMake
 #ifndef DEFAULT_MODEL_PATH
@@ -15,22 +16,53 @@
 // Cấu hình audio (Whisper yêu cầu 16kHz, Mono)
 constexpr int SAMPLE_RATE = 16000;
 constexpr int CHANNELS = 1;
-constexpr int RECORD_SECONDS = 5; // Thời gian ghi âm
+constexpr int VAD_BUFFER_SIZE = 512;          // Kích thước buffer VAD
+constexpr int MIN_SPEECH_DURATION = 500;      // Thời gian tối thiểu để kích hoạt (ms)
+constexpr int SILENCE_DURATION = 800;         // Thời gian im lặng trước khi dừng (ms)
+constexpr float VOICE_THRESHOLD = 0.02f;      // Ngưỡng năng lượng phát hiện giọng nói
 
-// Buffer lưu dữ liệu audio
-std::vector<float> g_pcmf32;
-std::atomic<bool> g_recording{true};
+// Buffer lưu dữ liệu audio có thể truy cập từ callback
+std::vector<float> g_audio_buffer;
+std::atomic<bool> g_listening{true};
+
+// Signal handler cho Ctrl+C
+void signal_handler(int signal) {
+    if (signal == SIGINT) {
+        std::cout << "\n⏹ Nhận tín hiệu dừng, đang thoát..." << std::endl;
+        g_listening = false;
+    }
+}
 
 // Callback function cho SDL audio capture
 void audio_callback(void* userdata, Uint8* stream, int len) {
-    if (!g_recording) return;
+    (void)userdata; // Unused parameter
+    if (!g_listening) return;
     
     // SDL capture với format AUDIO_F32 sẽ cho float trực tiếp
     float* samples = reinterpret_cast<float*>(stream);
     int n_samples = len / sizeof(float);
     
     // Thêm vào buffer
-    g_pcmf32.insert(g_pcmf32.end(), samples, samples + n_samples);
+    g_audio_buffer.insert(g_audio_buffer.end(), samples, samples + n_samples);
+}
+
+// Tính năng lượng RMS của audio để phát hiện giọng nói
+float compute_rms(const std::vector<float>& samples, size_t start, size_t end) {
+    if (start >= end || end > samples.size()) return 0.0f;
+    
+    float sum = 0.0f;
+    for (size_t i = start; i < end; i++) {
+        sum += samples[i] * samples[i];
+    }
+    return std::sqrt(sum / (end - start));
+}
+
+// Kiểm tra xem có giọng nói trong audio buffer không
+bool has_voice_activity(const std::vector<float>& samples, size_t window_size = VAD_BUFFER_SIZE) {
+    if (samples.size() < window_size) return false;
+    
+    float rms = compute_rms(samples, samples.size() - window_size, samples.size());
+    return rms > VOICE_THRESHOLD;
 }
 
 bool init_sdl_audio(SDL_AudioDeviceID& dev) {
@@ -69,78 +101,146 @@ bool init_sdl_audio(SDL_AudioDeviceID& dev) {
     return true;
 }
 
-int main() {
-    // 1. Khởi tạo ngữ cảnh Whisper
+// Khởi tạo Whisper model
+struct whisper_context* init_whisper() {
     std::cout << "Đang tải model Whisper..." << std::endl;
     struct whisper_context_params cparams = whisper_context_default_params();
-    struct whisper_context * ctx = whisper_init_from_file_with_params(DEFAULT_MODEL_PATH, cparams);
+    struct whisper_context* ctx = whisper_init_from_file_with_params(DEFAULT_MODEL_PATH, cparams);
 
     if (!ctx) {
         std::cerr << "Lỗi: Không thể tải file model!" << std::endl;
-        return 1;
+        return nullptr;
     }
     std::cout << "Model loaded!" << std::endl;
+    return ctx;
+}
 
-    // 2. Khởi tạo SDL Audio và ghi âm từ microphone
+// Xử lý giọng nói với Whisper và in kết quả
+void transcribe_speech(struct whisper_context* ctx, const std::vector<float>& speech_buffer) {
+    if (speech_buffer.empty()) return;
+
+    std::cout << "🔍 Đang nhận diện..." << std::endl;
+
+    whisper_full_params wparams = whisper_full_default_params(WHISPER_SAMPLING_GREEDY);
+    wparams.print_progress = false;
+    wparams.print_special = false;
+    wparams.print_realtime = false;
+    wparams.print_timestamps = false;
+    wparams.language = "en";
+    wparams.n_threads = 4;
+
+    if (whisper_full(ctx, wparams, speech_buffer.data(), speech_buffer.size()) == 0) {
+        const int n_segments = whisper_full_n_segments(ctx);
+        std::cout << "📝 Kết quả:" << std::endl;
+        for (int i = 0; i < n_segments; ++i) {
+            const char* text = whisper_full_get_segment_text(ctx, i);
+            if (text && strlen(text) > 0) {
+                std::cout << "  > " << text << std::endl;
+            }
+        }
+    }
+    std::cout << std::endl;
+}
+
+// Giới hạn kích thước buffer để tiết kiệm memory
+void limit_buffer_size(std::vector<float>& buffer, int max_seconds = 30, int keep_seconds = 10) {
+    size_t max_samples = SAMPLE_RATE * max_seconds;
+    if (buffer.size() > max_samples) {
+        size_t keep_samples = SAMPLE_RATE * keep_seconds;
+        buffer.erase(buffer.begin(), buffer.begin() + (buffer.size() - keep_samples));
+    }
+}
+
+// Xử lý vòng lặp lắng nghe chính
+void listening_loop(struct whisper_context* ctx, SDL_AudioDeviceID audio_dev) {
+    int silence_timeout_ms = 0;
+    bool collecting_speech = false;
+    int speech_duration_ms = 0;
+    std::vector<float> speech_buffer;
+
+    std::cout << "\n🎤 Đang lắng nghe... (Nói bất kỳ lúc nào!)" << std::endl;
+    std::cout << "Nhấn Ctrl+C để thoát.\n" << std::endl;
+
+    // Bắt đầu capture audio
+    SDL_PauseAudioDevice(audio_dev, 0);
+
+    // Vòng lặp liên tục để lắng nghe và phát hiện giọng nói
+    while (g_listening) {
+        // Kiểm tra xem có giọng nói không
+        bool has_voice = has_voice_activity(g_audio_buffer);
+
+        // Bắt đầu ghi âm khi phát hiện giọng nói
+        if (has_voice && !collecting_speech) {
+            collecting_speech = true;
+            speech_duration_ms = 0;
+            silence_timeout_ms = 0;
+            speech_buffer.clear();
+            speech_buffer = g_audio_buffer;
+            std::cout << "🔴 Đang ghi âm..." << std::endl;
+        }
+
+        // Cập nhật trạng thái ghi âm
+        if (collecting_speech) {
+            speech_buffer = g_audio_buffer;
+            speech_duration_ms += 50;
+
+            if (has_voice) {
+                silence_timeout_ms = 0;
+            } else {
+                silence_timeout_ms += 50;
+            }
+
+            // Kiểm tra xem đã kết thúc giọng nói không
+            if (speech_duration_ms >= MIN_SPEECH_DURATION && silence_timeout_ms >= SILENCE_DURATION) {
+                collecting_speech = false;
+                std::cout << "⏹ Ghi âm hoàn thành!" << std::endl;
+
+                // Xử lý giọng nói
+                transcribe_speech(ctx, speech_buffer);
+
+                // Xóa global buffer để bắt đầu lại
+                g_audio_buffer.clear();
+                std::cout << "🎤 Lắng nghe tiếp...\n" << std::endl;
+            }
+        }
+
+        // Giới hạn kích thước buffer
+        limit_buffer_size(g_audio_buffer);
+
+        // Chờ một chút trước khi check lại
+        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    }
+
+    SDL_PauseAudioDevice(audio_dev, 1);
+}
+
+// Cleanup và giải phóng resources
+void cleanup(struct whisper_context* ctx, SDL_AudioDeviceID audio_dev) {
+    SDL_CloseAudioDevice(audio_dev);
+    whisper_free(ctx);
+    SDL_Quit();
+    std::cout << "\n✅ Đã thoát." << std::endl;
+}
+
+int main() {
+    // Register signal handler for Ctrl+C
+    std::signal(SIGINT, signal_handler);
+
+    // Initialize Whisper model
+    struct whisper_context* ctx = init_whisper();
+    if (!ctx) return 1;
+
+    // Initialize SDL Audio
     SDL_AudioDeviceID audio_dev;
     if (!init_sdl_audio(audio_dev)) {
         whisper_free(ctx);
         return 1;
     }
 
-    // Reserve buffer cho ~5 giây audio
-    g_pcmf32.reserve(SAMPLE_RATE * RECORD_SECONDS);
+    // Main listening loop
+    listening_loop(ctx, audio_dev);
 
-    std::cout << "\n🎤 Bắt đầu ghi âm " << RECORD_SECONDS << " giây... Nói gì đó!" << std::endl;
-    
-    // Bắt đầu capture
-    SDL_PauseAudioDevice(audio_dev, 0);
-    
-    // Chờ ghi âm
-    std::this_thread::sleep_for(std::chrono::seconds(RECORD_SECONDS));
-    
-    // Dừng capture
-    g_recording = false;
-    SDL_PauseAudioDevice(audio_dev, 1);
-    SDL_CloseAudioDevice(audio_dev);
-    
-    std::cout << "✅ Ghi âm xong! Đã thu " << g_pcmf32.size() << " samples ("
-              << (float)g_pcmf32.size() / SAMPLE_RATE << " giây)" << std::endl;
-
-    if (g_pcmf32.empty()) {
-        std::cerr << "Lỗi: Không có dữ liệu audio!" << std::endl;
-        whisper_free(ctx);
-        SDL_Quit();
-        return 1;
-    }
-
-    // 3. Cấu hình tham số nhận diện
-    std::cout << "\n🔍 Đang nhận diện giọng nói..." << std::endl;
-    whisper_full_params wparams = whisper_full_default_params(WHISPER_SAMPLING_GREEDY);
-    wparams.print_progress = false;
-    wparams.print_special  = false;
-    wparams.print_realtime = false;
-    wparams.print_timestamps = false;
-    wparams.language       = "en"; // Ép định dạng tiếng Anh cho Robot Tutor
-    wparams.n_threads      = 4;    // Tận dụng đa nhân
-
-    // 4. Chạy nhận diện
-    if (whisper_full(ctx, wparams, g_pcmf32.data(), g_pcmf32.size()) != 0) {
-        std::cerr << "Lỗi xử lý âm thanh!" << std::endl;
-        whisper_free(ctx);
-        SDL_Quit();
-        return 1;
-    }
-
-    // 5. Lấy kết quả văn bản
-    std::cout << "\n📝 Kết quả:" << std::endl;
-    const int n_segments = whisper_full_n_segments(ctx);
-    for (int i = 0; i < n_segments; ++i) {
-        const char * text = whisper_full_get_segment_text(ctx, i);
-        std::cout << "Robot heard: " << text << std::endl;
-    }
-
-    whisper_free(ctx);
-    SDL_Quit();
+    // Cleanup
+    cleanup(ctx, audio_dev);
     return 0;
 }
