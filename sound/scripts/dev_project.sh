@@ -10,7 +10,8 @@ cmd_deps() {
     brew install cmake git sdl2 espeak-ng
   else
     sudo apt update
-    sudo apt install -y build-essential cmake pkg-config git libsdl2-dev espeak-ng libespeak-ng-dev
+    sudo apt install -y build-essential cmake pkg-config git libsdl2-dev libcurl4-openssl-dev \
+      espeak-ng libespeak-ng-dev
   fi
 }
 

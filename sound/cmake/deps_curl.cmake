@@ -1,0 +1,10 @@
+find_package(CURL QUIET)
+if (CURL_FOUND)
+    add_library(hecquin_deps_curl INTERFACE)
+    target_link_libraries(hecquin_deps_curl INTERFACE CURL::libcurl)
+    target_compile_definitions(hecquin_deps_curl INTERFACE HECQUIN_WITH_CURL=1)
+else ()
+    add_library(hecquin_deps_curl INTERFACE)
+    message(WARNING "libcurl not found — voice_detector will build without HTTP AI. "
+            "Install: macOS (Xcode CLT), Debian/Ubuntu: libcurl4-openssl-dev")
+endif ()

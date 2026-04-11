@@ -1,12 +1,16 @@
 #include "whisper.h"
+#include "CommandProcessor.hpp"
+
 #include <SDL.h>
-#include <vector>
-#include <string>
-#include <iostream>
 #include <atomic>
-#include <thread>
 #include <chrono>
 #include <csignal>
+#include <cstring>
+#include <iostream>
+#include <string>
+#include <future>
+#include <thread>
+#include <vector>
 
 // Fallback nếu không được định nghĩa từ CMake
 #ifndef DEFAULT_MODEL_PATH
@@ -115,9 +119,11 @@ struct whisper_context* init_whisper() {
     return ctx;
 }
 
-// Xử lý giọng nói với Whisper và in kết quả
-void transcribe_speech(struct whisper_context* ctx, const std::vector<float>& speech_buffer) {
-    if (speech_buffer.empty()) return;
+// Whisper STT — returns joined transcript text (may be empty).
+std::string transcribe_speech(struct whisper_context* ctx, const std::vector<float>& speech_buffer) {
+    if (speech_buffer.empty()) {
+        return {};
+    }
 
     std::cout << "🔍 Đang nhận diện..." << std::endl;
 
@@ -129,17 +135,48 @@ void transcribe_speech(struct whisper_context* ctx, const std::vector<float>& sp
     wparams.language = "en";
     wparams.n_threads = 4;
 
+    std::string joined;
     if (whisper_full(ctx, wparams, speech_buffer.data(), speech_buffer.size()) == 0) {
         const int n_segments = whisper_full_n_segments(ctx);
         std::cout << "📝 Kết quả:" << std::endl;
         for (int i = 0; i < n_segments; ++i) {
             const char* text = whisper_full_get_segment_text(ctx, i);
-            if (text && strlen(text) > 0) {
+            if (text && std::strlen(text) > 0) {
                 std::cout << "  > " << text << std::endl;
+                if (!joined.empty()) {
+                    joined += ' ';
+                }
+                joined += text;
             }
         }
     }
     std::cout << std::endl;
+    return joined;
+}
+
+void print_action(const Action& a) {
+    std::cout << "🤖 Route: ";
+    switch (a.kind) {
+        case ActionKind::None:
+            std::cout << "None";
+            break;
+        case ActionKind::LocalDevice:
+            std::cout << "LocalDevice";
+            break;
+        case ActionKind::InteractionTopicSearch:
+            std::cout << "TopicSearch";
+            break;
+        case ActionKind::InteractionMusicSearch:
+            std::cout << "MusicSearch";
+            break;
+        case ActionKind::ExternalApi:
+            std::cout << "ExternalApi";
+            break;
+        case ActionKind::AssistantSdk:
+            std::cout << "AssistantSdk";
+            break;
+    }
+    std::cout << "\n💬 " << a.reply << "\n\n";
 }
 
 // Giới hạn kích thước buffer để tiết kiệm memory
@@ -152,7 +189,7 @@ void limit_buffer_size(std::vector<float>& buffer, int max_seconds = 30, int kee
 }
 
 // Xử lý vòng lặp lắng nghe chính
-void listening_loop(struct whisper_context* ctx, SDL_AudioDeviceID audio_dev) {
+void listening_loop(struct whisper_context* ctx, SDL_AudioDeviceID audio_dev, CommandProcessor& commands) {
     int silence_timeout_ms = 0;
     bool collecting_speech = false;
     int speech_duration_ms = 0;
@@ -195,8 +232,11 @@ void listening_loop(struct whisper_context* ctx, SDL_AudioDeviceID audio_dev) {
                 collecting_speech = false;
                 std::cout << "⏹ Ghi âm hoàn thành!" << std::endl;
 
-                // Xử lý giọng nói
-                transcribe_speech(ctx, speech_buffer);
+                const std::string transcript = transcribe_speech(ctx, speech_buffer);
+                if (!transcript.empty()) {
+                    std::future<Action> fut = commands.process_async(transcript);
+                    print_action(fut.get());
+                }
 
                 // Xóa global buffer để bắt đầu lại
                 g_audio_buffer.clear();
@@ -237,8 +277,8 @@ int main() {
         return 1;
     }
 
-    // Main listening loop
-    listening_loop(ctx, audio_dev);
+    CommandProcessor commands;
+    listening_loop(ctx, audio_dev, commands);
 
     // Cleanup
     cleanup(ctx, audio_dev);

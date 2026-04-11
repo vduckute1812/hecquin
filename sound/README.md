@@ -4,16 +4,16 @@ A cross-platform audio processing module for the Robot Tutor project, providing 
 
 ## Overview
 
-The sound module consists of two main components:
+The sound module consists of two main executables plus a small **AI / command routing** library used by the voice detector:
 
 
-| Component          | Description                                                   | Technology                                              |
-| ------------------ | ------------------------------------------------------------- | ------------------------------------------------------- |
-| **Voice Detector** | Captures audio from microphone and transcribes speech to text | [whisper.cpp](https://github.com/ggerganov/whisper.cpp) |
-| **Text-to-Speech** | Synthesizes natural-sounding speech from text input           | [Piper TTS](https://github.com/rhasspy/piper)           |
+| Component          | Description                                                                                                              | Technology                                                                      |
+| ------------------ | ------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------- |
+| **Voice Detector** | Captures audio, transcribes with Whisper, then routes text through **CommandProcessor** (local phrases or HTTP chat API) | [whisper.cpp](https://github.com/ggerganov/whisper.cpp), **libcurl** (optional) |
+| **Text-to-Speech** | Synthesizes natural-sounding speech from text input                                                                      | [Piper TTS](https://github.com/rhasspy/piper)                                   |
 
 
-Both components use [SDL2](https://www.libsdl.org/) for cross-platform audio I/O.
+Both audio programs use [SDL2](https://www.libsdl.org/) for cross-platform audio I/O. External AI calls use **OpenAI-compatible** `POST …/v1/chat/completions` when libcurl is available at configure time.
 
 ## Platform Support
 
@@ -31,13 +31,17 @@ Both components use [SDL2](https://www.libsdl.org/) for cross-platform audio I/O
 sound/
 ├── CMakeLists.txt           # Main CMake configuration
 ├── dev.sh                   # Development automation script
-├── voice_detector.cpp       # Voice-to-text implementation
+├── voice_detector.cpp       # Voice-to-text + SDL capture loop
+├── CommandProcessor.cpp     # Regex routing + optional HTTP chat API
+├── CommandProcessor.hpp
+├── Action.hpp               # ActionKind + Action (route + reply text)
 ├── text_to_speech.cpp       # Text-to-speech implementation
 ├── cmake/
 │   ├── project_options.cmake      # Compiler flags (C++17)
 │   ├── deps_whisper.cmake         # Whisper discovery
 │   ├── deps_piper.cmake           # Piper TTS discovery
 │   ├── deps_sdl2.cmake            # SDL2 discovery
+│   ├── deps_curl.cmake            # libcurl (optional) for external AI
 │   ├── dependency_libraries.cmake # Interface libraries
 │   ├── targets.cmake              # Build targets
 │   ├── voice_to_text.cmake        # Voice detector target
@@ -78,12 +82,14 @@ cd sound
 
 Optional environment variables (see `scripts/install_build_all.sh` for comments):
 
-| Variable | Purpose |
-| -------- | ------- |
-| `SKIP_SYSTEM_DEPS=1` | Skip `./dev.sh deps` if packages are already installed |
-| `WHISPER_MODEL` | Whisper GGML model name (default: `base`) |
-| `PIPER_VOICE` | Piper voice id (default: `en_US-lessac-medium`) |
-| `HECQUIN_ENV` | Same as for `./dev.sh`: `dev` or `prod` to override platform detection |
+
+| Variable             | Purpose                                                                |
+| -------------------- | ---------------------------------------------------------------------- |
+| `SKIP_SYSTEM_DEPS=1` | Skip `./dev.sh deps` if packages are already installed                 |
+| `WHISPER_MODEL`      | Whisper GGML model name (default: `base`)                              |
+| `PIPER_VOICE`        | Piper voice id (default: `en_US-lessac-medium`)                        |
+| `HECQUIN_ENV`        | Same as for `./dev.sh`: `dev` or `prod` to override platform detection |
+
 
 After this, continue with **Run** below. For manual, step-by-step setup, use the following sections instead.
 
@@ -95,17 +101,23 @@ After this, continue with **Run** below. For manual, step-by-step setup, use the
 brew install cmake sdl2 espeak-ng
 ```
 
+The Apple / Xcode SDK usually provides **libcurl** headers and libraries so CMake can enable HTTP AI; if configure warns that CURL was not found, install the Command Line Tools or a Homebrew `curl` and ensure CMake’s `FindCURL` can see it.
+
 **Ubuntu/Debian:**
 
 ```bash
-sudo apt install build-essential cmake pkg-config git libsdl2-dev espeak-ng libespeak-ng-dev
+sudo apt install build-essential cmake pkg-config git libsdl2-dev libcurl4-openssl-dev \
+  espeak-ng libespeak-ng-dev
 ```
 
 **Raspberry Pi:**
 
 ```bash
-sudo apt install build-essential cmake pkg-config git libsdl2-dev espeak-ng libespeak-ng-dev
+sudo apt install build-essential cmake pkg-config git libsdl2-dev libcurl4-openssl-dev \
+  espeak-ng libespeak-ng-dev
 ```
+
+`libcurl4-openssl-dev` is required for **external AI** (OpenAI-compatible HTTP) in `voice_detector`. If CMake cannot find CURL, the binary still builds, but cloud routing returns a compile-time message instead of performing HTTP.
 
 ### 2. Setup Development Environment
 
@@ -150,21 +162,49 @@ cd sound
 
 ## Detailed Usage
 
-### Voice Detector (Speech Recognition)
+### Voice Detector (Speech Recognition + AI routing)
 
-The voice detector listens on the default microphone, detects speech activity, and transcribes captured audio to text using Whisper.
+The voice detector listens on the default microphone, detects speech activity, transcribes audio with Whisper, then passes the joined transcript to `**CommandProcessor**`:
+
+1. **Local commands** — matched with case-insensitive regular expressions (fast, no network).
+2. **External API** — if nothing matches, sends the user text to an **OpenAI-compatible** chat completions endpoint (requires API key and a build with libcurl).
 
 ```bash
 # Run with default model (ggml-base.bin)
 ./dev.sh run voice_detector
 ```
 
-**Configuration:**
+**Local routing (summary):**
+
+
+| Spoken pattern (regex idea)                | `ActionKind`             | Typical `reply`                                                   |
+| ------------------------------------------ | ------------------------ | ----------------------------------------------------------------- |
+| `turn on` / `turn off` + `air` or `switch` | `LocalDevice`            | Short confirmation (e.g. turning air on/off)                      |
+| `tell me a story`                          | `InteractionTopicSearch` | Prompt to choose a story / topic                                  |
+| `open music`                               | `InteractionMusicSearch` | Prompt for music intent                                           |
+| *(no match)*                               | `ExternalApi`            | Assistant text from the HTTP API (or an error / disabled message) |
+
+
+`ActionKind::AssistantSdk` is reserved for a future subprocess (e.g. Python Google Assistant SDK); it is not wired yet.
+
+**Audio configuration:**
 
 - Sample rate: 16 kHz (required by Whisper)
 - Channels: Mono
 - Voice activity detection for automatic capture
 - Language: English (configurable in code)
+
+**External AI environment variables:**
+
+
+| Variable                                   | Purpose                                         |
+| ------------------------------------------ | ----------------------------------------------- |
+| `OPENAI_API_KEY` or `HECQUIN_AI_API_KEY`   | Bearer token for chat completions               |
+| `OPENAI_BASE_URL` or `HECQUIN_AI_BASE_URL` | API root (default: `https://api.openai.com/v1`) |
+| `OPENAI_MODEL` or `HECQUIN_AI_MODEL`       | Model name (default: `gpt-4o-mini`)             |
+
+
+Use any provider that exposes the same JSON shape as OpenAI `**/v1/chat/completions`** (adjust base URL accordingly). The client does not implement vendor-specific Gemini JSON.
 
 **Example output:**
 
@@ -175,14 +215,19 @@ Tìm thấy 1 thiết bị ghi âm:
   [0] MacBook Pro Microphone
 Audio device: 16000Hz, 1 channels, format=33056
 
-🎤 Đang lắng nghe giọng nói...
+🎤 Đang lắng nghe... (Nói bất kỳ lúc nào!)
 ⏹ Ghi âm hoàn thành!
 
-🔍 Đang nhận diện giọng nói...
+🔍 Đang nhận diện...
 
 📝 Kết quả:
   > Hello, how are you today?
+
+🤖 Route: ExternalApi
+💬 I'm doing well — how can I help you today?
 ```
+
+For a local phrase such as “turn on the air”, the route line shows `LocalDevice` and the reply is the short confirmation string instead of an API call.
 
 ### Transcribe Existing Audio
 
@@ -293,14 +338,17 @@ The CMake configuration expects:
 2. Whisper built and installed in `.env/<platform>/whisper-install/`
 3. Piper executable in `.env/<platform>/piper/`
 4. Models in `.env/shared/models/`
+5. **libcurl** (development package) for full external AI support — if `find_package(CURL)` fails, `voice_detector` still links a stub interface library and external HTTP is disabled at compile time (`HECQUIN_WITH_CURL` not defined)
 
 ### Build Manually
 
 ```bash
 mkdir -p build/mac && cd build/mac
-cmake ../..
-make -j$(nproc)
+cmake ..
+cmake --build . -j"$(nproc 2>/dev/null || sysctl -n hw.ncpu)"
 ```
+
+Paths like `PIPER_EXECUTABLE` and the default Piper model are normally passed by `./dev.sh build`; when invoking CMake manually, set the same `-D` options as in `scripts/dev_project.sh` if needed.
 
 ### Custom Paths
 
@@ -317,15 +365,17 @@ cmake ../.. \
 ### Voice Detector Flow
 
 ```
-┌─────────────┐    ┌─────────────┐    ┌─────────────┐
-│ Microphone  │───>│ SDL2 Audio  │───>│   Whisper   │
-│   Input     │    │   Capture   │    │ Transcribe  │
-└─────────────┘    └─────────────┘    └─────────────┘
-                         │                   │
-                         v                   v
-                   Float32 PCM          Text Output
-                   16kHz Mono
+┌─────────────┐    ┌─────────────┐    ┌─────────────┐    ┌──────────────────┐
+│ Microphone  │───>│ SDL2 Audio  │───>│   Whisper   │───>│ CommandProcessor │
+│   Input     │    │   Capture   │    │ Transcribe  │    │ (regex + HTTP)   │
+└─────────────┘    └─────────────┘    └─────────────┘    └──────────────────┘
+                         │                   │                      │
+                         v                   v                      v
+                   Float32 PCM          Transcript            Action (route + reply)
+                   16kHz Mono            (joined text)        (console / future TTS)
 ```
+
+Transcription runs on the thread that owns the listen loop; routing to the external API is started via `**std::async**` so work can proceed on a worker thread while SDL continues capturing in its audio callback.
 
 ### Text-to-Speech Flow
 
@@ -392,6 +442,12 @@ Model không tồn tại: .env/shared/models/ggml-base.bin
 ./dev.sh piper:download-model en_US-lessac-medium
 ```
 
+### External AI disabled or misconfigured
+
+- **CMake:** `libcurl not found — voice_detector will build without HTTP AI` — install the CURL development package (`libcurl4-openssl-dev` on Debian/Ubuntu; Xcode Command Line Tools usually suffice on macOS), then re-run `./dev.sh build`.
+- **Runtime:** `Set OPENAI_API_KEY or HECQUIN_AI_API_KEY for cloud replies` — export one of those variables before `./dev.sh run voice_detector`.
+- **HTTP errors:** Check `OPENAI_BASE_URL` / model name; the response body (truncated) is included in the printed reply when the status code is not 2xx.
+
 ## License
 
 Part of the Hecquin Robot Tutor project.
@@ -401,4 +457,5 @@ Part of the Hecquin Robot Tutor project.
 - [whisper.cpp](https://github.com/ggerganov/whisper.cpp) - MIT License
 - [Piper TTS](https://github.com/rhasspy/piper) - MIT License
 - [SDL2](https://www.libsdl.org/) - zlib License
+- [libcurl](https://curl.se/libcurl/) (optional, for OpenAI-compatible chat API from `voice_detector`) — MIT-style license
 
