@@ -1,4 +1,5 @@
 # Text-to-Speech executable (Piper TTS)
-add_executable(text_to_speech ${CMAKE_CURRENT_SOURCE_DIR}/text_to_speech.cpp)
-target_link_libraries(text_to_speech PRIVATE hecquin_deps_sdl2 hecquin_deps_piper)
+set(HECQUIN_SOUND_SRC_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/src")
 
+add_executable(text_to_speech ${HECQUIN_SOUND_SRC_ROOT}/cli/TextToSpeech.cpp)
+target_link_libraries(text_to_speech PRIVATE hecquin_piper_speech)

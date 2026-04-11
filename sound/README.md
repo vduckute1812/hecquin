@@ -7,10 +7,10 @@ A cross-platform audio processing module for the Robot Tutor project, providing 
 The sound module consists of two main executables plus a small **AI / command routing** library used by the voice detector:
 
 
-| Component          | Description                                                                                                              | Technology                                                                      |
-| ------------------ | ------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------- |
-| **Voice Detector** | Captures audio, transcribes with Whisper, then routes text through **CommandProcessor** (local phrases or HTTP chat API) | [whisper.cpp](https://github.com/ggerganov/whisper.cpp), **libcurl** (optional) |
-| **Text-to-Speech** | Synthesizes natural-sounding speech from text input                                                                      | [Piper TTS](https://github.com/rhasspy/piper)                                   |
+| Component          | Description                                                                                                                                                                                   | Technology                                                                             |
+| ------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------- |
+| **Voice Detector** | Captures audio, transcribes with Whisper, routes text through **CommandProcessor**, then speaks `**Action.reply`** with **Piper** + SDL playback (capture is paused during TTS to limit echo) | [whisper.cpp](https://github.com/ggerganov/whisper.cpp), **libcurl** (optional), Piper |
+| **Text-to-Speech** | Synthesizes natural-sounding speech from text input                                                                                                                                           | [Piper TTS](https://github.com/rhasspy/piper)                                          |
 
 
 Both audio programs use [SDL2](https://www.libsdl.org/) for cross-platform audio I/O. External AI calls use **OpenAI-compatible** `POST …/v1/chat/completions` when libcurl is available at configure time.
@@ -31,11 +31,24 @@ Both audio programs use [SDL2](https://www.libsdl.org/) for cross-platform audio
 sound/
 ├── CMakeLists.txt           # Main CMake configuration
 ├── dev.sh                   # Development automation script
-├── voice_detector.cpp       # Voice-to-text + SDL capture loop
-├── CommandProcessor.cpp     # Regex routing + optional HTTP chat API
-├── CommandProcessor.hpp
-├── Action.hpp               # ActionKind + Action (route + reply text)
-├── text_to_speech.cpp       # Text-to-speech implementation
+├── src/                     # C++ sources (include root: `#include "voice/…"`, `ai/…`, etc.)
+│   ├── voice/               # Capture, Whisper, VAD listen loop, `main`
+│   │   ├── VoiceDetector.cpp
+│   │   ├── VoiceListener.cpp
+│   │   ├── VoiceListener.hpp
+│   │   ├── AudioCapture.cpp
+│   │   ├── AudioCapture.hpp
+│   │   ├── WhisperEngine.cpp
+│   │   └── WhisperEngine.hpp
+│   ├── ai/                  # Transcript routing + HTTP API
+│   │   ├── Action.hpp
+│   │   ├── CommandProcessor.cpp
+│   │   └── CommandProcessor.hpp
+│   ├── tts/                 # Piper + SDL playback (static lib)
+│   │   ├── PiperSpeech.cpp
+│   │   └── PiperSpeech.hpp
+│   └── cli/                 # Standalone TTS executable entry
+│       └── TextToSpeech.cpp
 ├── cmake/
 │   ├── project_options.cmake      # Compiler flags (C++17)
 │   ├── deps_whisper.cmake         # Whisper discovery
@@ -45,7 +58,8 @@ sound/
 │   ├── dependency_libraries.cmake # Interface libraries
 │   ├── targets.cmake              # Build targets
 │   ├── voice_to_text.cmake        # Voice detector target
-│   └── text_to_speech.cmake       # TTS target
+│   ├── text_to_speech.cmake       # TTS target
+│   └── piper_speech.cmake         # Static lib hecquin_piper_speech
 ├── scripts/
 │   ├── dev_project.sh          # Project build helpers
 │   ├── dev_whisper.sh          # Whisper setup helpers
@@ -204,9 +218,11 @@ The voice detector listens on the default microphone, detects speech activity, t
 | `OPENAI_MODEL` or `HECQUIN_AI_MODEL`       | Model name (default: `gpt-4o-mini`)             |
 
 
-Use any provider that exposes the same JSON shape as OpenAI `**/v1/chat/completions`** (adjust base URL accordingly). The client does not implement vendor-specific Gemini JSON.
+Use any provider that exposes the same JSON shape as OpenAI `/v1/chat/completions` (adjust base URL accordingly). The client does not implement vendor-specific Gemini JSON.
 
-**Example output:**
+**Responses (speech):** After routing, the assistant `**Action.reply`** string is sent to **Piper** (same default `.onnx` as `text_to_speech`, set at CMake configure time). While Piper runs and audio plays, **microphone capture is paused** and the ring buffer is cleared so the assistant is less likely to be re-transcribed from the speakers.
+
+**Example console output (reply is spoken, not printed as `💬`):**
 
 ```
 Đang tải model Whisper...
@@ -224,10 +240,12 @@ Audio device: 16000Hz, 1 channels, format=33056
   > Hello, how are you today?
 
 🤖 Route: ExternalApi
-💬 I'm doing well — how can I help you today?
+🔊 Đang tổng hợp giọng nói...
+📊 Loaded … samples (… s)
+🔊 Đang phát giọng nói...
 ```
 
-For a local phrase such as “turn on the air”, the route line shows `LocalDevice` and the reply is the short confirmation string instead of an API call.
+For a local phrase such as “turn on the air”, the route line shows `LocalDevice` and Piper speaks the short confirmation instead of calling the API. If Piper fails, an error is written to **stderr** and the reply text is included there for debugging.
 
 ### Transcribe Existing Audio
 
@@ -355,7 +373,7 @@ Paths like `PIPER_EXECUTABLE` and the default Piper model are normally passed by
 Override default paths with CMake variables:
 
 ```bash
-cmake ../.. \
+cmake .. \
   -DWHISPER_INSTALL_DIR=/path/to/whisper \
   -DDEFAULT_PIPER_MODEL_PATH=/path/to/voice.onnx
 ```
@@ -371,11 +389,16 @@ cmake ../.. \
 └─────────────┘    └─────────────┘    └─────────────┘    └──────────────────┘
                          │                   │                      │
                          v                   v                      v
-                   Float32 PCM          Transcript            Action (route + reply)
-                   16kHz Mono            (joined text)        (console / future TTS)
+                   Float32 PCM          Transcript            Action.reply
+                   16kHz Mono            (joined text)              │
+                                                                      v
+                        ┌──────────────────────────────────────────────┐
+                        │ Pause capture → Piper (WAV) → SDL playback     │
+                        │ 22050 Hz mono → speakers → resume capture      │
+                        └──────────────────────────────────────────────┘
 ```
 
-Transcription runs on the thread that owns the listen loop; routing to the external API is started via `**std::async**` so work can proceed on a worker thread while SDL continues capturing in its audio callback.
+Transcription runs on the thread that owns the listen loop; routing to the external API is started via `**std::async**` so work can proceed on a worker thread while SDL continues capturing in its audio callback. **TTS** uses a **second** SDL audio device (playback); capture is paused for the Piper + playback phase so playback is not fed straight back into Whisper.
 
 ### Text-to-Speech Flow
 

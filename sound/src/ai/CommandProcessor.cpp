@@ -1,4 +1,4 @@
-#include "CommandProcessor.hpp"
+#include "ai/CommandProcessor.hpp"
 
 #include <algorithm>
 #include <cctype>
