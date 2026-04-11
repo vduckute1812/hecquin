@@ -69,7 +69,6 @@ void VoiceListener::run() {
     int silence_ms = 0;
     bool collecting = false;
     int speech_ms = 0;
-    std::vector<float> utterance;
 
     std::cout << "\n🎤 Đang lắng nghe... (Nói bất kỳ lúc nào!)" << std::endl;
     std::cout << "Nhấn Ctrl+C để thoát.\n" << std::endl;
@@ -84,13 +83,10 @@ void VoiceListener::run() {
             collecting = true;
             speech_ms = 0;
             silence_ms = 0;
-            utterance.clear();
-            utterance = live;
             std::cout << "🔴 Đang ghi âm..." << std::endl;
         }
 
         if (collecting) {
-            utterance = live;
             speech_ms += cfg_.poll_interval_ms;
 
             if (has_voice) {
@@ -103,7 +99,7 @@ void VoiceListener::run() {
                 collecting = false;
                 std::cout << "⏹ Ghi âm hoàn thành!" << std::endl;
 
-                const std::string transcript = whisper_.transcribe(utterance);
+                const std::string transcript = whisper_.transcribe(live);
                 if (!transcript.empty()) {
                     std::future<Action> fut = commands_.process_async(transcript);
                     speakReply(fut.get());

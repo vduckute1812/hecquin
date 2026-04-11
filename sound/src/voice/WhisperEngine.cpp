@@ -5,26 +5,31 @@
 #include <cstring>
 #include <iostream>
 
+namespace detail {
+
+void whisper_context_deleter(whisper_context* ctx) noexcept {
+    if (ctx) {
+        whisper_free(ctx);
+    }
+}
+
+} // namespace detail
+
 WhisperEngine::WhisperEngine(const char* model_path) {
     std::cout << "Đang tải model Whisper..." << std::endl;
     whisper_context_params cparams = whisper_context_default_params();
-    ctx_ = whisper_init_from_file_with_params(model_path, cparams);
-    if (!ctx_) {
+    whisper_context* raw = whisper_init_from_file_with_params(model_path, cparams);
+    if (!raw) {
         std::cerr << "Lỗi: Không thể tải file model!" << std::endl;
         return;
     }
+    ctx_.reset(raw);
     std::cout << "Model loaded!" << std::endl;
 }
 
-WhisperEngine::~WhisperEngine() {
-    if (ctx_) {
-        whisper_free(ctx_);
-        ctx_ = nullptr;
-    }
-}
-
 std::string WhisperEngine::transcribe(const std::vector<float>& samples) {
-    if (!ctx_ || samples.empty()) {
+    whisper_context* ctx = ctx_.get();
+    if (!ctx || samples.empty()) {
         return {};
     }
 
@@ -39,11 +44,11 @@ std::string WhisperEngine::transcribe(const std::vector<float>& samples) {
     wparams.n_threads = 4;
 
     std::string joined;
-    if (whisper_full(ctx_, wparams, samples.data(), static_cast<int>(samples.size())) == 0) {
-        const int n_segments = whisper_full_n_segments(ctx_);
+    if (whisper_full(ctx, wparams, samples.data(), static_cast<int>(samples.size())) == 0) {
+        const int n_segments = whisper_full_n_segments(ctx);
         std::cout << "📝 Kết quả:" << std::endl;
         for (int i = 0; i < n_segments; ++i) {
-            const char* text = whisper_full_get_segment_text(ctx_, i);
+            const char* text = whisper_full_get_segment_text(ctx, i);
             if (text && std::strlen(text) > 0) {
                 std::cout << "  > " << text << std::endl;
                 if (!joined.empty()) {

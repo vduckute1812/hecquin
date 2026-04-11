@@ -6,6 +6,7 @@
 #include <future>
 #include <iomanip>
 #include <iostream>
+#include <memory>
 #include <mutex>
 #include <regex>
 #include <sstream>
@@ -112,6 +113,17 @@ size_t curl_write_string(char* ptr, size_t size, size_t nmemb, void* userdata) {
     out->append(ptr, size * nmemb);
     return size * nmemb;
 }
+
+struct CurlEasyDeleter {
+    void operator()(CURL* c) const noexcept { curl_easy_cleanup(c); }
+};
+
+struct CurlSlistDeleter {
+    void operator()(curl_slist* s) const noexcept { curl_slist_free_all(s); }
+};
+
+using CurlEasyPtr = std::unique_ptr<CURL, CurlEasyDeleter>;
+using CurlSlistPtr = std::unique_ptr<curl_slist, CurlSlistDeleter>;
 #endif
 
 } // namespace
@@ -221,30 +233,29 @@ Action CommandProcessor::call_external_api_(const std::string& user_text) const 
                              "\"}]}";
 
     std::string response;
-    CURL* curl = curl_easy_init();
+    CurlEasyPtr curl(curl_easy_init());
     if (!curl) {
         a.reply = "Failed to initialize HTTP client.";
         return a;
     }
 
-    struct curl_slist* headers = nullptr;
-    headers = curl_slist_append(headers, "Content-Type: application/json");
-    std::string auth = "Authorization: Bearer " + config_.api_key;
-    headers = curl_slist_append(headers, auth.c_str());
+    curl_slist* header_list = nullptr;
+    header_list = curl_slist_append(header_list, "Content-Type: application/json");
+    const std::string auth = "Authorization: Bearer " + config_.api_key;
+    header_list = curl_slist_append(header_list, auth.c_str());
+    CurlSlistPtr headers(header_list);
 
-    curl_easy_setopt(curl, CURLOPT_URL, config_.chat_completions_url.c_str());
-    curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
-    curl_easy_setopt(curl, CURLOPT_POSTFIELDS, body.c_str());
-    curl_easy_setopt(curl, CURLOPT_POSTFIELDSIZE, static_cast<long>(body.size()));
-    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, curl_write_string);
-    curl_easy_setopt(curl, CURLOPT_WRITEDATA, &response);
-    curl_easy_setopt(curl, CURLOPT_TIMEOUT, 60L);
+    curl_easy_setopt(curl.get(), CURLOPT_URL, config_.chat_completions_url.c_str());
+    curl_easy_setopt(curl.get(), CURLOPT_HTTPHEADER, headers.get());
+    curl_easy_setopt(curl.get(), CURLOPT_POSTFIELDS, body.c_str());
+    curl_easy_setopt(curl.get(), CURLOPT_POSTFIELDSIZE, static_cast<long>(body.size()));
+    curl_easy_setopt(curl.get(), CURLOPT_WRITEFUNCTION, curl_write_string);
+    curl_easy_setopt(curl.get(), CURLOPT_WRITEDATA, &response);
+    curl_easy_setopt(curl.get(), CURLOPT_TIMEOUT, 60L);
 
-    const CURLcode res = curl_easy_perform(curl);
+    const CURLcode res = curl_easy_perform(curl.get());
     long http_code = 0;
-    curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &http_code);
-    curl_slist_free_all(headers);
-    curl_easy_cleanup(curl);
+    curl_easy_getinfo(curl.get(), CURLINFO_RESPONSE_CODE, &http_code);
 
     if (res != CURLE_OK) {
         a.reply = std::string("Request failed: ") + curl_easy_strerror(res);

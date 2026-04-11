@@ -66,6 +66,7 @@ sound/
 │   ├── dev_piper.sh            # Piper TTS setup helpers
 │   └── install_build_all.sh    # One-shot: system deps, whisper, piper, models, CMake build
 ├── build/                   # Build output (per-platform)
+│   ├── linux/
 │   ├── mac/
 │   └── rpi/
 └── .env/                    # Local dependencies (not in git)
@@ -178,7 +179,7 @@ cd sound
 
 ### Voice Detector (Speech Recognition + AI routing)
 
-The voice detector listens on the default microphone, detects speech activity, transcribes audio with Whisper, then passes the joined transcript to `**CommandProcessor**`:
+The voice detector listens on the default microphone, detects speech activity, transcribes audio with Whisper, then passes the joined transcript to **CommandProcessor**:
 
 1. **Local commands** — matched with case-insensitive regular expressions (fast, no network).
 2. **External API** — if nothing matches, sends the user text to an **OpenAI-compatible** chat completions endpoint (requires API key and a build with libcurl).
@@ -220,7 +221,7 @@ The voice detector listens on the default microphone, detects speech activity, t
 
 Use any provider that exposes the same JSON shape as OpenAI `/v1/chat/completions` (adjust base URL accordingly). The client does not implement vendor-specific Gemini JSON.
 
-**Responses (speech):** After routing, the assistant `**Action.reply`** string is sent to **Piper** (same default `.onnx` as `text_to_speech`, set at CMake configure time). While Piper runs and audio plays, **microphone capture is paused** and the ring buffer is cleared so the assistant is less likely to be re-transcribed from the speakers.
+**Responses (speech):** After routing, the assistant **Action.reply** string is sent to **Piper** (same default `.onnx` as `text_to_speech`, set at CMake configure time). While Piper runs and audio plays, **microphone capture is paused** and the capture buffer is cleared so the assistant is less likely to be re-transcribed from the speakers.
 
 **Example console output (reply is spoken, not printed as `💬`):**
 
@@ -398,7 +399,13 @@ cmake .. \
                         └──────────────────────────────────────────────┘
 ```
 
-Transcription runs on the thread that owns the listen loop; routing to the external API is started via `**std::async**` so work can proceed on a worker thread while SDL continues capturing in its audio callback. **TTS** uses a **second** SDL audio device (playback); capture is paused for the Piper + playback phase so playback is not fed straight back into Whisper.
+Transcription runs on the thread that owns the listen loop; routing to the external API is started via **std::async** so work can proceed on a worker thread while SDL continues capturing in its audio callback. **TTS** uses a **second** SDL audio device (playback); capture is paused for the Piper + playback phase so playback is not fed straight back into Whisper.
+
+**C++ implementation notes:**
+
+- **WhisperEngine** owns the `whisper_context` with **`std::unique_ptr`** and a custom deleter so the model is always freed on teardown.
+- When **libcurl** is enabled, **CommandProcessor** wraps **`CURL*`** and **`curl_slist*`** in **`std::unique_ptr`** with custom deleters so HTTP setup is released on every return path.
+- The VAD loop polls **`AudioCapture::snapshotBuffer()`** each interval; when end-of-speech is detected, **that iteration’s snapshot** is passed to Whisper (no extra full-buffer copy on every poll while recording).
 
 ### Text-to-Speech Flow
 

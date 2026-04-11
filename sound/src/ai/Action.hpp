@@ -21,7 +21,7 @@ struct Action {
 };
 
 /** Short ASCII label for logs (not localized). */
-inline const char* actionKindLabel(ActionKind k) {
+[[nodiscard]] inline constexpr const char* actionKindLabel(ActionKind k) noexcept {
     switch (k) {
         case ActionKind::None:
             return "None";
