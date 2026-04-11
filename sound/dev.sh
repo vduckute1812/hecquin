@@ -45,6 +45,7 @@ echo "📁 Environment: $ENV_TYPE"
 usage() {
   cat <<'EOF'
 Usage:
+  ./dev.sh install:all           Full setup: deps, whisper, piper, models, build (scripts/install_build_all.sh)
   ./dev.sh deps
   ./dev.sh whisper:clone
   ./dev.sh whisper:build
@@ -92,6 +93,7 @@ cmd="${1:-}"
 arg="${2:-}"
 
 case "$cmd" in
+  install:all) bash "$ROOT_DIR/scripts/install_build_all.sh" ;;
   deps) cmd_deps ;;
   whisper:clone) cmd_whisper_clone ;;
   whisper:build) cmd_whisper_build ;;
