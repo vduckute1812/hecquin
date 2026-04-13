@@ -1,4 +1,5 @@
 #include "ai/CommandProcessor.hpp"
+#include "config/AppConfig.hpp"
 #include "voice/AudioCapture.hpp"
 #include "voice/VoiceListener.hpp"
 #include "voice/WhisperEngine.hpp"
@@ -43,7 +44,8 @@ int main() {
         return 1;
     }
 
-    CommandProcessor commands;
+    AppConfig app_config = AppConfig::load();
+    CommandProcessor commands(std::move(app_config.ai));
     VoiceListener listener(whisper, capture, commands, g_app_running, DEFAULT_PIPER_MODEL_PATH);
     listener.run();
 

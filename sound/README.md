@@ -214,12 +214,26 @@ The voice detector listens on the default microphone, detects speech activity, t
 
 | Variable                                   | Purpose                                         |
 | ------------------------------------------ | ----------------------------------------------- |
-| `OPENAI_API_KEY` or `HECQUIN_AI_API_KEY`   | Bearer token for chat completions               |
+| `OPENAI_API_KEY`, `HECQUIN_AI_API_KEY`, `GEMINI_API_KEY`, or `GOOGLE_API_KEY` | Bearer token for chat completions (first non-empty wins) |
 | `OPENAI_BASE_URL` or `HECQUIN_AI_BASE_URL` | API root (default: `https://api.openai.com/v1`) |
 | `OPENAI_MODEL` or `HECQUIN_AI_MODEL`       | Model name (default: `gpt-4o-mini`)             |
 
 
-Use any provider that exposes the same JSON shape as OpenAI `/v1/chat/completions` (adjust base URL accordingly). The client does not implement vendor-specific Gemini JSON.
+Use any provider that exposes the same JSON shape as OpenAI `/v1/chat/completions` (adjust base URL accordingly). The client does not call the native Gemini JSON API; it works with Google’s **OpenAI-compatible** Gemini host (see below).
+
+#### Google Gemini 2.5 Flash-Lite (development)
+
+[Gemini’s OpenAI compatibility layer](https://ai.google.dev/gemini-api/docs/openai) serves `POST …/chat/completions` at `https://generativelanguage.googleapis.com/v1beta/openai/`. Point the sound module at that root and set the model id to **`gemini-2.5-flash-lite`** (see [model card](https://ai.google.dev/gemini-api/docs/models/gemini-2.5-flash-lite)).
+
+Example for `.env/config.env` or your shell (get a key from [Google AI Studio](https://aistudio.google.com/apikey)):
+
+```bash
+export GEMINI_API_KEY="your-api-key"
+export HECQUIN_AI_BASE_URL="https://generativelanguage.googleapis.com/v1beta/openai"
+export HECQUIN_AI_MODEL="gemini-2.5-flash-lite"
+```
+
+Then run `./dev.sh run voice_detector` as usual. The same variables work if you prefer `HECQUIN_AI_API_KEY` instead of `GEMINI_API_KEY`.
 
 **Responses (speech):** After routing, the assistant **Action.reply** string is sent to **Piper** (same default `.onnx` as `text_to_speech`, set at CMake configure time). While Piper runs and audio plays, **microphone capture is paused** and the capture buffer is cleared so the assistant is less likely to be re-transcribed from the speakers.
 
@@ -392,10 +406,10 @@ cmake .. \
                          v                   v                      v
                    Float32 PCM          Transcript            Action.reply
                    16kHz Mono            (joined text)              │
-                                                                      v
+                                                                    v
                         ┌──────────────────────────────────────────────┐
-                        │ Pause capture → Piper (WAV) → SDL playback     │
-                        │ 22050 Hz mono → speakers → resume capture      │
+                        │ Pause capture → Piper (WAV) → SDL playback   │
+                        │ 22050 Hz mono → speakers → resume capture    │
                         └──────────────────────────────────────────────┘
 ```
 
@@ -475,7 +489,7 @@ Model không tồn tại: .env/shared/models/ggml-base.bin
 ### External AI disabled or misconfigured
 
 - **CMake:** `libcurl not found — voice_detector will build without HTTP AI` — install the CURL development package (`libcurl4-openssl-dev` on Debian/Ubuntu; Xcode Command Line Tools usually suffice on macOS), then re-run `./dev.sh build`.
-- **Runtime:** `Set OPENAI_API_KEY or HECQUIN_AI_API_KEY for cloud replies` — export one of those variables before `./dev.sh run voice_detector`.
+- **Runtime:** `Set … for cloud replies` — export `OPENAI_API_KEY`, `HECQUIN_AI_API_KEY`, `GEMINI_API_KEY`, or `GOOGLE_API_KEY` before `./dev.sh run voice_detector` (for Gemini, set `HECQUIN_AI_BASE_URL` to Google’s OpenAI-compatible root; see **Google Gemini 2.5 Flash-Lite** above).
 - **HTTP errors:** Check `OPENAI_BASE_URL` / model name; the response body (truncated) is included in the printed reply when the status code is not 2xx.
 
 ## License

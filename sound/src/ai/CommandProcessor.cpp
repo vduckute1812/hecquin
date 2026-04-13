@@ -2,10 +2,8 @@
 
 #include <algorithm>
 #include <cctype>
-#include <cstdlib>
 #include <future>
 #include <iomanip>
-#include <iostream>
 #include <memory>
 #include <mutex>
 #include <regex>
@@ -27,11 +25,6 @@ std::string trim_copy(std::string s) {
 std::string to_lower_copy(std::string s) {
     std::transform(s.begin(), s.end(), s.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
     return s;
-}
-
-std::string getenv_string(const char* key) {
-    const char* v = std::getenv(key);
-    return v ? std::string(v) : std::string();
 }
 
 std::string json_escape(const std::string& s) {
@@ -128,43 +121,6 @@ using CurlSlistPtr = std::unique_ptr<curl_slist, CurlSlistDeleter>;
 
 } // namespace
 
-AiClientConfig AiClientConfig::from_environment() {
-    AiClientConfig c;
-    c.api_key = getenv_string("OPENAI_API_KEY");
-    if (c.api_key.empty()) {
-        c.api_key = getenv_string("HECQUIN_AI_API_KEY");
-    }
-    std::string base = getenv_string("OPENAI_BASE_URL");
-    if (base.empty()) {
-        base = getenv_string("HECQUIN_AI_BASE_URL");
-    }
-    if (base.empty()) {
-        base = "https://api.openai.com/v1";
-    }
-    while (!base.empty() && base.back() == '/') {
-        base.pop_back();
-    }
-    c.chat_completions_url = base + "/chat/completions";
-
-    std::string model = getenv_string("HECQUIN_AI_MODEL");
-    if (model.empty()) {
-        model = getenv_string("OPENAI_MODEL");
-    }
-    if (!model.empty()) {
-        c.model = model;
-    }
-    return c;
-}
-
-bool AiClientConfig::ready() const {
-#ifdef HECQUIN_WITH_CURL
-    return !api_key.empty();
-#else
-    (void)api_key;
-    return false;
-#endif
-}
-
 CommandProcessor::CommandProcessor(AiClientConfig config) : config_(std::move(config)) {}
 
 std::optional<Action> CommandProcessor::match_local_(const std::string& n) const {
@@ -221,7 +177,7 @@ Action CommandProcessor::call_external_api_(const std::string& user_text) const 
     return a;
 #else
     if (!config_.ready()) {
-        a.reply = "Set OPENAI_API_KEY or HECQUIN_AI_API_KEY for cloud replies.";
+        a.reply = "Set OPENAI_API_KEY, HECQUIN_AI_API_KEY, GEMINI_API_KEY, or GOOGLE_API_KEY for cloud replies.";
         return a;
     }
 

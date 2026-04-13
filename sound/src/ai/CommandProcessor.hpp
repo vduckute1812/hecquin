@@ -1,27 +1,18 @@
 #pragma once
 
 #include "ai/Action.hpp"
+#include "config/ai/AiClientConfig.hpp"
 
 #include <future>
 #include <optional>
 #include <string>
-
-struct AiClientConfig {
-    /** OpenAI-compatible chat completions URL (e.g. https://api.openai.com/v1/chat/completions). */
-    std::string chat_completions_url;
-    std::string api_key;
-    std::string model = "gpt-4o-mini";
-
-    static AiClientConfig from_environment();
-    bool ready() const;
-};
 
 /**
  * Routes speech transcripts to local commands, interaction modes, or an HTTP chat API.
  */
 class CommandProcessor {
 public:
-    explicit CommandProcessor(AiClientConfig config = AiClientConfig::from_environment());
+    explicit CommandProcessor(AiClientConfig config = AiClientConfig::from_default_config());
 
     /** Full pipeline: fast local regex; external API runs on a worker thread (caller waits on result). */
     Action process(const std::string& transcript);
