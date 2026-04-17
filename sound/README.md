@@ -31,7 +31,7 @@ Both audio programs use [SDL2](https://www.libsdl.org/) for cross-platform audio
 sound/
 ├── CMakeLists.txt           # Main CMake configuration
 ├── dev.sh                   # Development automation script
-├── src/                     # C++ sources (include root: `#include "voice/…"`, `ai/…`, etc.)
+├── src/                     # C++ sources (include root: `#include "voice/…"`, `ai/…`, `actions/…`, etc.)
 │   ├── voice/               # Capture, Whisper, VAD listen loop, `main`
 │   │   ├── VoiceDetector.cpp
 │   │   ├── VoiceListener.cpp
@@ -40,15 +40,21 @@ sound/
 │   │   ├── AudioCapture.hpp
 │   │   ├── WhisperEngine.cpp
 │   │   └── WhisperEngine.hpp
-│   ├── ai/                  # Transcript routing + HTTP API
-│   │   ├── Action.hpp
+│   ├── config/              # Env / defaults (`ConfigStore`, `AppConfig`, …)
+│   │   └── ai/              # `AiClientConfig` (API keys, model, base URL)
+│   ├── actions/             # Routed intents → `Action` (`Action.hpp`, `*Action.hpp`, …)
+│   ├── ai/                  # `CommandProcessor` + chat HTTP + response parsing
 │   │   ├── CommandProcessor.cpp
-│   │   └── CommandProcessor.hpp
+│   │   ├── CommandProcessor.hpp
+│   │   ├── OpenAiChatContent.cpp
+│   │   └── OpenAiChatContent.hpp
 │   ├── tts/                 # Piper + SDL playback (static lib)
 │   │   ├── PiperSpeech.cpp
 │   │   └── PiperSpeech.hpp
 │   └── cli/                 # Standalone TTS executable entry
 │       └── TextToSpeech.cpp
+├── tests/                   # Small unit tests (optional CMake target)
+│   └── test_openai_chat_content.cpp
 ├── cmake/
 │   ├── project_options.cmake      # Compiler flags (C++17)
 │   ├── deps_whisper.cmake         # Whisper discovery
@@ -59,6 +65,7 @@ sound/
 │   ├── targets.cmake              # Build targets
 │   ├── voice_to_text.cmake        # Voice detector target
 │   ├── text_to_speech.cmake       # TTS target
+│   ├── sound_tests.cmake          # `hecquin_sound_test_openai_chat` + CTest
 │   └── piper_speech.cmake         # Static lib hecquin_piper_speech
 ├── scripts/
 │   ├── dev_project.sh          # Project build helpers
@@ -104,9 +111,21 @@ Optional environment variables (see `scripts/install_build_all.sh` for comments)
 | `WHISPER_MODEL`      | Whisper GGML model name (default: `base`)                              |
 | `PIPER_VOICE`        | Piper voice id (default: `en_US-lessac-medium`)                        |
 | `HECQUIN_ENV`        | Same as for `./dev.sh`: `dev` or `prod` to override platform detection |
+| `HECQUIN_SOUND_BUILD_TESTS` | CMake: set `OFF` to skip the small `hecquin_sound_test_openai_chat` binary |
 
 
-After this, continue with **Run** below. For manual, step-by-step setup, use the following sections instead.
+After this, continue with **Run** below.
+
+### Unit tests (optional)
+
+After a normal CMake configure/build from `sound/build`:
+
+```bash
+cd sound/build
+ctest --output-on-failure
+```
+
+Or run the binary directly: `./hecquin_sound_test_openai_chat` (build tree location depends on your generator). For manual, step-by-step setup, use the following sections instead.
 
 ### 1. Install System Dependencies
 

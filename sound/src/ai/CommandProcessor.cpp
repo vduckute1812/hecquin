@@ -1,4 +1,10 @@
 #include "ai/CommandProcessor.hpp"
+#include "actions/NoneAction.hpp"
+#include "actions/DeviceAction.hpp"
+#include "actions/ExternalApiAction.hpp"
+#include "actions/MusicAction.hpp"
+#include "actions/TopicSearchAction.hpp"
+#include "ai/OpenAiChatContent.hpp"
 
 #include <algorithm>
 #include <cctype>
@@ -50,56 +56,6 @@ std::string json_escape(const std::string& s) {
     return out;
 }
 
-/** Very small parser: find "\"content\":\"" in first choice message and read until unescaped quote. */
-std::string extract_chat_content(const std::string& json) {
-    const std::string key = "\"content\":";
-    size_t pos = json.find(key);
-    if (pos == std::string::npos) {
-        return {};
-    }
-    pos = json.find('"', pos + key.size());
-    if (pos == std::string::npos) {
-        return {};
-    }
-    ++pos;
-    std::string out;
-    while (pos < json.size()) {
-        char c = json[pos];
-        if (c == '\\' && pos + 1 < json.size()) {
-            char n = json[pos + 1];
-            if (n == 'n') {
-                out += '\n';
-                pos += 2;
-                continue;
-            }
-            if (n == 't') {
-                out += '\t';
-                pos += 2;
-                continue;
-            }
-            if (n == 'r') {
-                out += '\r';
-                pos += 2;
-                continue;
-            }
-            if (n == '"' || n == '\\') {
-                out += n;
-                pos += 2;
-                continue;
-            }
-            out += c;
-            ++pos;
-            continue;
-        }
-        if (c == '"') {
-            break;
-        }
-        out += c;
-        ++pos;
-    }
-    return out;
-}
-
 #ifdef HECQUIN_WITH_CURL
 size_t curl_write_string(char* ptr, size_t size, size_t nmemb, void* userdata) {
     auto* out = static_cast<std::string*>(userdata);
@@ -140,45 +96,31 @@ std::optional<Action> CommandProcessor::match_local_(const std::string& n) const
     if (std::regex_search(n, m, re_device)) {
         const std::string verb = to_lower_copy(trim_copy(std::string(m[1].first, m[1].second)));
         const std::string target = to_lower_copy(trim_copy(std::string(m[2].first, m[2].second)));
-        Action a;
-        a.kind = ActionKind::LocalDevice;
-        a.transcript = n;
-        std::string device = (target == "air") ? std::string("air conditioning") : target;
-        a.reply = std::string("Okay, ") + verb + " the " + device + ".";
-        return a;
+        const DevicePowerVerb power = (verb == "turn on") ? DevicePowerVerb::TurnOn : DevicePowerVerb::TurnOff;
+        const DeviceOption device = (target == "air") ? DeviceOption::AirConditioning : DeviceOption::Switch;
+        return DeviceAction{power, device}.into_action(n);
     }
 
     if (std::regex_search(n, re_story)) {
-        Action a;
-        a.kind = ActionKind::InteractionTopicSearch;
-        a.transcript = n;
-        a.reply = "Sure — what kind of story would you like? I can search for a topic.";
-        return a;
+        return TopicSearchAction{}.into_action(n);
     }
 
     if (std::regex_search(n, re_music)) {
-        Action a;
-        a.kind = ActionKind::InteractionMusicSearch;
-        a.transcript = n;
-        a.reply = "Opening music search. What would you like to hear?";
-        return a;
+        return MusicAction{}.into_action(n);
     }
 
     return std::nullopt;
 }
 
 Action CommandProcessor::call_external_api_(const std::string& user_text) const {
-    Action a;
-    a.kind = ActionKind::ExternalApi;
-    a.transcript = user_text;
-
 #ifndef HECQUIN_WITH_CURL
-    a.reply = "External API is unavailable in this build (libcurl not found at configure time).";
-    return a;
+    return ExternalApiAction::with_reply(
+        "External API is unavailable in this build (libcurl not found at configure time).", user_text);
 #else
     if (!config_.ready()) {
-        a.reply = "Set OPENAI_API_KEY, HECQUIN_AI_API_KEY, GEMINI_API_KEY, or GOOGLE_API_KEY for cloud replies.";
-        return a;
+        return ExternalApiAction::with_reply(
+            "Set OPENAI_API_KEY, HECQUIN_AI_API_KEY, GEMINI_API_KEY, or GOOGLE_API_KEY for cloud replies.",
+            user_text);
     }
 
     static std::once_flag curl_init_once;
@@ -191,8 +133,7 @@ Action CommandProcessor::call_external_api_(const std::string& user_text) const 
     std::string response;
     CurlEasyPtr curl(curl_easy_init());
     if (!curl) {
-        a.reply = "Failed to initialize HTTP client.";
-        return a;
+        return ExternalApiAction::with_reply("Failed to initialize HTTP client.", user_text);
     }
 
     curl_slist* header_list = nullptr;
@@ -214,22 +155,19 @@ Action CommandProcessor::call_external_api_(const std::string& user_text) const 
     curl_easy_getinfo(curl.get(), CURLINFO_RESPONSE_CODE, &http_code);
 
     if (res != CURLE_OK) {
-        a.reply = std::string("Request failed: ") + curl_easy_strerror(res);
-        return a;
+        return ExternalApiAction::with_reply(std::string("Request failed: ") + curl_easy_strerror(res), user_text);
     }
 
     if (http_code < 200 || http_code >= 300) {
-        a.reply = "API error HTTP " + std::to_string(http_code) + ": " + response.substr(0, 500);
-        return a;
+        return ExternalApiAction::with_reply("API error HTTP " + std::to_string(http_code) + ": " + response.substr(0, 500),
+                                             user_text);
     }
 
-    std::string content = extract_chat_content(response);
-    if (content.empty()) {
-        a.reply = "Could not parse model reply.";
-        return a;
+    const auto content = extract_openai_chat_assistant_content(response);
+    if (!content) {
+        return ExternalApiAction::with_reply("Could not parse model reply.", user_text);
     }
-    a.reply = content;
-    return a;
+    return ExternalApiAction::with_reply(*content, user_text);
 #endif
 }
 
@@ -237,10 +175,7 @@ Action CommandProcessor::process(const std::string& transcript) {
     const std::string trimmed = trim_copy(transcript);
     const std::string normalized = to_lower_copy(trimmed);
     if (normalized.empty()) {
-        Action a;
-        a.kind = ActionKind::None;
-        a.reply = "(empty transcript)";
-        return a;
+        return NoneAction::empty_transcript();
     }
 
     if (auto local = match_local_(normalized)) {

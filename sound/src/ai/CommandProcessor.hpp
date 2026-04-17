@@ -1,6 +1,6 @@
 #pragma once
 
-#include "ai/Action.hpp"
+#include "actions/Action.hpp"
 #include "config/ai/AiClientConfig.hpp"
 
 #include <future>

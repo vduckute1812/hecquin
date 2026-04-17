@@ -1,6 +1,6 @@
 #pragma once
 
-#include "ai/Action.hpp"
+#include "actions/Action.hpp"
 #include "ai/CommandProcessor.hpp"
 #include "voice/AudioCapture.hpp"
 #include "voice/WhisperEngine.hpp"

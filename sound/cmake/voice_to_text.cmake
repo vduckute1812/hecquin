@@ -1,5 +1,7 @@
 # Voice detector executable (voice-to-text + command / AI routing)
-set(HECQUIN_SOUND_SRC_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/src")
+if (NOT DEFINED HECQUIN_SOUND_SRC_ROOT)
+    set(HECQUIN_SOUND_SRC_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/src")
+endif ()
 
 add_executable(voice_detector
     ${HECQUIN_SOUND_SRC_ROOT}/voice/VoiceDetector.cpp
@@ -9,6 +11,7 @@ add_executable(voice_detector
     ${HECQUIN_SOUND_SRC_ROOT}/config/ConfigStore.cpp
     ${HECQUIN_SOUND_SRC_ROOT}/config/AppConfig.cpp
     ${HECQUIN_SOUND_SRC_ROOT}/config/ai/AiClientConfig.cpp
+    ${HECQUIN_SOUND_SRC_ROOT}/ai/OpenAiChatContent.cpp
     ${HECQUIN_SOUND_SRC_ROOT}/ai/CommandProcessor.cpp
 )
 target_link_libraries(voice_detector PRIVATE hecquin_deps_whisper hecquin_deps_sdl2 hecquin_deps_curl

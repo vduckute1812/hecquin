@@ -1,16 +1,8 @@
 #pragma once
 
-#include <string>
+#include "actions/ActionKind.hpp"
 
-/** High-level outcome of routing a transcript through the AI / command layer. */
-enum class ActionKind {
-    None,
-    LocalDevice,
-    InteractionTopicSearch,
-    InteractionMusicSearch,
-    ExternalApi,
-    AssistantSdk,
-};
+#include <string>
 
 struct Action {
     ActionKind kind = ActionKind::None;
@@ -35,7 +27,5 @@ struct Action {
             return "ExternalApi";
         case ActionKind::AssistantSdk:
             return "AssistantSdk";
-        default:
-            return "Unknown";
     }
 }
