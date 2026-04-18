@@ -20,4 +20,5 @@ target_link_libraries(voice_detector PRIVATE hecquin_deps_whisper hecquin_deps_s
 # Định nghĩa đường dẫn mặc định tới model
 target_compile_definitions(voice_detector PRIVATE
     DEFAULT_MODEL_PATH="${MODELS_DIR}/ggml-base.bin"
+    DEFAULT_CONFIG_PATH="${CMAKE_CURRENT_SOURCE_DIR}/.env/config.env"
 )

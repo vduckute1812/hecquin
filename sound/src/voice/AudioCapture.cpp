@@ -40,8 +40,17 @@ bool AudioCapture::open(std::atomic<bool>& keep_capturing, const AudioCaptureCon
     want.callback = sdlCallback;
     want.userdata = this;
 
+    const char* device_name = nullptr;
+    if (cfg_.device_index >= 0 && cfg_.device_index < num_devices) {
+        device_name = SDL_GetAudioDeviceName(cfg_.device_index, SDL_TRUE);
+        std::cout << "→ Chọn thiết bị [" << cfg_.device_index << "] " << device_name << std::endl;
+    } else if (cfg_.device_index >= 0) {
+        std::cerr << "AUDIO_DEVICE_INDEX=" << cfg_.device_index
+                  << " ngoài phạm vi (0.." << num_devices - 1 << "), dùng mặc định." << std::endl;
+    }
+
     SDL_AudioSpec have;
-    device_id_ = SDL_OpenAudioDevice(nullptr, SDL_TRUE, &want, &have, 0);
+    device_id_ = SDL_OpenAudioDevice(device_name, SDL_TRUE, &want, &have, 0);
     if (device_id_ == 0) {
         std::cerr << "Lỗi mở audio device: " << SDL_GetError() << std::endl;
         return false;

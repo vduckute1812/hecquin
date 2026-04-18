@@ -14,6 +14,7 @@
 #include <mutex>
 #include <regex>
 #include <sstream>
+#include <iostream>
 
 #ifdef HECQUIN_WITH_CURL
 #include <curl/curl.h>
@@ -141,6 +142,10 @@ Action CommandProcessor::call_external_api_(const std::string& user_text) const 
     const std::string auth = "Authorization: Bearer " + config_.api_key;
     header_list = curl_slist_append(header_list, auth.c_str());
     CurlSlistPtr headers(header_list);
+
+    std::cout << "api_key: " << config_.api_key << std::endl;
+    std::cout << "chat_completions_url: " << config_.chat_completions_url << std::endl;
+    std::cout << "body: " << body << std::endl;
 
     curl_easy_setopt(curl.get(), CURLOPT_URL, config_.chat_completions_url.c_str());
     curl_easy_setopt(curl.get(), CURLOPT_HTTPHEADER, headers.get());

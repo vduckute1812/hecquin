@@ -10,6 +10,7 @@ struct AudioCaptureConfig {
     int sample_rate = 16000;
     int channels = 1;
     int sdl_buffer_samples = 1024;
+    int device_index = -1; // -1 = system default
 };
 
 /**

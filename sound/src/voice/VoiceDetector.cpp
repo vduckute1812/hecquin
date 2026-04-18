@@ -18,6 +18,10 @@
 #define DEFAULT_PIPER_MODEL_PATH ".env/shared/models/piper/en_US-lessac-medium.onnx"
 #endif
 
+#ifndef DEFAULT_CONFIG_PATH
+#define DEFAULT_CONFIG_PATH ConfigStore::kDefaultPath
+#endif
+
 namespace {
 
 std::atomic<bool> g_app_running{true};
@@ -39,12 +43,12 @@ int main() {
         return 1;
     }
 
+    AppConfig app_config = AppConfig::load(DEFAULT_CONFIG_PATH);
+
     AudioCapture capture;
-    if (!capture.open(g_app_running)) {
+    if (!capture.open(g_app_running, app_config.audio)) {
         return 1;
     }
-
-    AppConfig app_config = AppConfig::load();
     CommandProcessor commands(std::move(app_config.ai));
     VoiceListener listener(whisper, capture, commands, g_app_running, DEFAULT_PIPER_MODEL_PATH);
     listener.run();

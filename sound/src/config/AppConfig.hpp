@@ -2,6 +2,7 @@
 
 #include "config/ai/AiClientConfig.hpp"
 #include "config/ConfigStore.hpp"
+#include "voice/AudioCapture.hpp"
 
 /**
  * Top-level application settings loaded from `.env/config.env` (and environment overrides).
@@ -9,6 +10,7 @@
  */
 struct AppConfig {
     AiClientConfig ai;
+    AudioCaptureConfig audio;
 
     static AppConfig load(const char* env_file_path = ConfigStore::kDefaultPath);
 };
