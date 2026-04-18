@@ -22,6 +22,10 @@
 #define DEFAULT_CONFIG_PATH ConfigStore::kDefaultPath
 #endif
 
+#ifndef DEFAULT_PROMPTS_DIR
+#define DEFAULT_PROMPTS_DIR nullptr
+#endif
+
 namespace {
 
 std::atomic<bool> g_app_running{true};
@@ -43,7 +47,7 @@ int main() {
         return 1;
     }
 
-    AppConfig app_config = AppConfig::load(DEFAULT_CONFIG_PATH);
+    AppConfig app_config = AppConfig::load(DEFAULT_CONFIG_PATH, DEFAULT_PROMPTS_DIR);
 
     AudioCapture capture;
     if (!capture.open(g_app_running, app_config.audio)) {

@@ -12,6 +12,7 @@ add_executable(voice_detector
     ${HECQUIN_SOUND_SRC_ROOT}/config/AppConfig.cpp
     ${HECQUIN_SOUND_SRC_ROOT}/config/ai/AiClientConfig.cpp
     ${HECQUIN_SOUND_SRC_ROOT}/ai/OpenAiChatContent.cpp
+    ${HECQUIN_SOUND_SRC_ROOT}/ai/HttpClient.cpp
     ${HECQUIN_SOUND_SRC_ROOT}/ai/CommandProcessor.cpp
 )
 target_link_libraries(voice_detector PRIVATE hecquin_deps_whisper hecquin_deps_sdl2 hecquin_deps_curl
@@ -21,4 +22,5 @@ target_link_libraries(voice_detector PRIVATE hecquin_deps_whisper hecquin_deps_s
 target_compile_definitions(voice_detector PRIVATE
     DEFAULT_MODEL_PATH="${MODELS_DIR}/ggml-base.bin"
     DEFAULT_CONFIG_PATH="${CMAKE_CURRENT_SOURCE_DIR}/.env/config.env"
+    DEFAULT_PROMPTS_DIR="${CMAKE_CURRENT_SOURCE_DIR}/.env/prompts"
 )

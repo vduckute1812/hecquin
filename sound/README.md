@@ -43,9 +43,11 @@ sound/
 │   ├── config/              # Env / defaults (`ConfigStore`, `AppConfig`, …)
 │   │   └── ai/              # `AiClientConfig` (API keys, model, base URL)
 │   ├── actions/             # Routed intents → `Action` (`Action.hpp`, `*Action.hpp`, …)
-│   ├── ai/                  # `CommandProcessor` + chat HTTP + response parsing
+│   ├── ai/                  # `CommandProcessor` + HTTP client + response parsing
 │   │   ├── CommandProcessor.cpp
 │   │   ├── CommandProcessor.hpp
+│   │   ├── HttpClient.cpp
+│   │   ├── HttpClient.hpp
 │   │   ├── OpenAiChatContent.cpp
 │   │   └── OpenAiChatContent.hpp
 │   ├── tts/                 # Piper + SDL playback (static lib)
@@ -77,6 +79,9 @@ sound/
 │   ├── mac/
 │   └── rpi/
 └── .env/                    # Local dependencies (not in git)
+    ├── config.env           # Runtime config (API keys, audio device, etc.)
+    ├── prompts/             # AI prompt files (editable without recompiling)
+    │   └── system_prompt.txt
     ├── linux/               # Linux-specific installs
     ├── mac/                 # macOS binaries
     ├── rpi/                 # Raspberry Pi binaries
@@ -227,6 +232,7 @@ The voice detector listens on the default microphone, detects speech activity, t
 - Channels: Mono
 - Voice activity detection for automatic capture
 - Language: English (configurable in code)
+- Device selection via `AUDIO_DEVICE_INDEX` in `.env/config.env` (`-1` = system default; run once to see the numbered device list)
 
 **External AI environment variables:**
 
@@ -236,6 +242,9 @@ The voice detector listens on the default microphone, detects speech activity, t
 | `OPENAI_API_KEY`, `HECQUIN_AI_API_KEY`, `GEMINI_API_KEY`, or `GOOGLE_API_KEY` | Bearer token for chat completions (first non-empty wins) |
 | `OPENAI_BASE_URL` or `HECQUIN_AI_BASE_URL` | API root (default: `https://api.openai.com/v1`) |
 | `OPENAI_MODEL` or `HECQUIN_AI_MODEL`       | Model name (default: `gpt-4o-mini`)             |
+| `AUDIO_DEVICE_INDEX`                       | Capture device index (`-1` = system default)    |
+
+**System prompt:** The AI system prompt is loaded from `.env/prompts/system_prompt.txt` at startup. Edit this file to change the assistant's personality or response style without recompiling. If the file is missing, a built-in default is used.
 
 
 Use any provider that exposes the same JSON shape as OpenAI `/v1/chat/completions` (adjust base URL accordingly). The client does not call the native Gemini JSON API; it works with Google’s **OpenAI-compatible** Gemini host (see below).
@@ -436,9 +445,10 @@ Transcription runs on the thread that owns the listen loop; routing to the exter
 
 **C++ implementation notes:**
 
-- **WhisperEngine** owns the `whisper_context` with **`std::unique_ptr`** and a custom deleter so the model is always freed on teardown.
-- When **libcurl** is enabled, **CommandProcessor** wraps **`CURL*`** and **`curl_slist*`** in **`std::unique_ptr`** with custom deleters so HTTP setup is released on every return path.
+- **WhisperEngine** owns the `whisper_context` with **`std::unique_ptr`** and a custom deleter so the model is always freed on teardown. Known Whisper noise tokens (`[BLANK_AUDIO]`, `[NO_SPEECH]`, `[ Inaudible Remark ]`, etc.) are filtered out so they never reach the AI API.
+- **CommandProcessor** delegates HTTP transport to **`HttpClient`** (`http_post_json`), which owns all libcurl boilerplate. JSON body assembly lives in `build_chat_body_()`, keeping `call_external_api_()` focused on orchestration and error handling.
 - The VAD loop polls **`AudioCapture::snapshotBuffer()`** each interval; when end-of-speech is detected, **that iteration’s snapshot** is passed to Whisper (no extra full-buffer copy on every poll while recording).
+- AI responses are sanitized for TTS (markdown stripped, whitespace normalized) before being sent to Piper.
 
 ### Text-to-Speech Flow
 

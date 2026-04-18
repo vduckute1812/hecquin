@@ -12,5 +12,6 @@ struct AppConfig {
     AiClientConfig ai;
     AudioCaptureConfig audio;
 
-    static AppConfig load(const char* env_file_path = ConfigStore::kDefaultPath);
+    static AppConfig load(const char* env_file_path = ConfigStore::kDefaultPath,
+                          const char* prompts_dir = nullptr);
 };

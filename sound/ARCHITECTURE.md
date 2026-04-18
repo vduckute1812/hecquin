@@ -55,7 +55,8 @@ src/
 │   ├── VoiceListener.hpp/cpp     — VAD + pipeline orchestration
 │   └── cli/VoiceDetector.cpp     — voice_detector executable entry point
 ├── ai/
-│   ├── CommandProcessor.hpp/cpp  — local matching + HTTP routing
+│   ├── CommandProcessor.hpp/cpp  — local matching + AI routing
+│   ├── HttpClient.hpp/cpp        — reusable HTTP POST (libcurl)
 │   └── OpenAiChatContent.hpp/cpp — hand-rolled OpenAI JSON parser
 ├── actions/
 │   ├── ActionKind.hpp            — enum: None / LocalDevice / TopicSearch / Music / ExternalApi / AssistantSdk
@@ -80,7 +81,7 @@ src/
 
 ### AudioCapture
 
-Opens the default microphone via SDL2 at 16 kHz, mono, float32. An SDL audio callback appends samples to a mutex-protected ring buffer. The main thread calls `snapshotBuffer()` for a thread-safe copy. During TTS playback, `pauseDevice()` / `resumeDevice()` prevent mic echo. `limitBufferSize()` trims the buffer to keep only the last N seconds.
+Opens a microphone via SDL2 at 16 kHz, mono, float32. The device is selectable via `AUDIO_DEVICE_INDEX` in `config.env` (`-1` = system default). An SDL audio callback appends samples to a mutex-protected ring buffer. The main thread calls `snapshotBuffer()` for a thread-safe copy. During TTS playback, `pauseDevice()` / `resumeDevice()` prevent mic echo. `limitBufferSize()` trims the buffer to keep only the last N seconds.
 
 ### VoiceListener
 
@@ -123,20 +124,26 @@ Configuration (`VoiceListenerConfig`):
 
 ### WhisperEngine
 
-RAII wrapper around `whisper_context`. Loads a GGML model at construction. `transcribe()` runs greedy decoding on a float32 sample vector and returns joined segment text. Language is hard-coded to English.
+RAII wrapper around `whisper_context`. Loads a GGML model at construction. `transcribe()` runs greedy decoding on a float32 sample vector and returns joined segment text. Language is hard-coded to English. Known Whisper noise tokens (`[BLANK_AUDIO]`, `[NO_SPEECH]`, `[ Inaudible Remark ]`, etc.) are filtered out — `transcribe()` returns an empty string for these.
 
 ### CommandProcessor
 
 Two-stage routing:
 
-1. **Local (synchronous)** — regex matching on normalized (lowercase, trimmed) transcript:
+1. **Local (synchronous)** — `match_local_()` runs regex matching on the normalized (lowercase, trimmed) transcript:
    - `turn on|turn off` + `air|switch` → `DeviceAction`
    - `tell me a story` → `TopicSearchAction`
    - `open music` → `MusicAction`
 
-2. **External API (async)** — `std::async` HTTP POST to an OpenAI-compatible chat endpoint via libcurl. Only available when compiled with `HECQUIN_WITH_CURL` and a valid API key is configured. Timeout is 60 seconds.
+2. **External API (async)** — `call_external_api_()` sends the transcript to an OpenAI-compatible chat endpoint. `build_chat_body_()` assembles the JSON payload (model, system prompt, user message). The actual HTTP POST is delegated to `HttpClient`. Only available when compiled with `HECQUIN_WITH_CURL` and a valid API key is configured. Timeout is 60 seconds.
+
+The system prompt is loaded at startup from `.env/prompts/system_prompt.txt` (editable without recompiling) and stored in `AiClientConfig::system_prompt`. If the file is missing, a built-in default is used.
 
 `process()` blocks until a result is ready. `process_async()` returns `std::future<Action>`.
+
+### HttpClient
+
+Reusable `http_post_json()` free function. Owns all libcurl boilerplate (global init, handle lifecycle, headers, error handling). Returns `std::optional<HttpResult>` — `nullopt` on transport failure, otherwise the HTTP status code and response body. Guarded by `#ifdef HECQUIN_WITH_CURL`; returns `nullopt` unconditionally when curl is absent.
 
 ### OpenAiChatContent
 
@@ -146,6 +153,8 @@ Hand-rolled JSON extractor (no external library). Scans the response string for 
 
 `ConfigStore` parses `.env/config.env` (key=value, `#` comments, `export` prefix, quoted values stripped). Process environment variables always take precedence over file entries.
 
+`AppConfig::load()` accepts an `env_file_path` and an optional `prompts_dir` (both resolved to absolute paths by CMake at compile time to avoid working-directory issues).
+
 `AiClientConfig` resolves settings with the following priority chains:
 
 | Setting | Priority |
@@ -153,6 +162,7 @@ Hand-rolled JSON extractor (no external library). Scans the response string for 
 | API key | `OPENAI_API_KEY` → `HECQUIN_AI_API_KEY` → `GEMINI_API_KEY` → `GOOGLE_API_KEY` |
 | Base URL | `OPENAI_BASE_URL` → `HECQUIN_AI_BASE_URL` (default: `https://api.openai.com/v1`) |
 | Model | `HECQUIN_AI_MODEL` → `OPENAI_MODEL` (default: `gpt-4o-mini`) |
+| System prompt | Loaded from `<prompts_dir>/system_prompt.txt`; falls back to built-in default |
 
 `ready()` returns true only when libcurl is compiled in and an API key is present.
 
@@ -226,6 +236,8 @@ Key preprocessor defines set by CMake:
 | `HECQUIN_WITH_CURL` | libcurl found; external API enabled |
 | `DEFAULT_MODEL_PATH` | Whisper GGML model path |
 | `DEFAULT_PIPER_MODEL_PATH` | Piper voice model path |
+| `DEFAULT_CONFIG_PATH` | Absolute path to `.env/config.env` |
+| `DEFAULT_PROMPTS_DIR` | Absolute path to `.env/prompts/` |
 | `PIPER_EXECUTABLE` | Path to piper binary |
 
 ### Platform Detection
@@ -242,10 +254,12 @@ Whisper/Piper models are shared across platforms in `.env/shared/models/`.
 
 ## Default Model Paths
 
-| Model | Default path |
+| Resource | Default path |
 |---|---|
-| Whisper | `.env/shared/models/ggml-base.bin` |
-| Piper voice | `.env/shared/models/piper/en_US-lessac-medium.onnx` |
+| Whisper model | `.env/shared/models/ggml-base.bin` |
+| Piper voice model | `.env/shared/models/piper/en_US-lessac-medium.onnx` |
+| Config | `.env/config.env` |
+| System prompt | `.env/prompts/system_prompt.txt` |
 
 ---
 

@@ -2,6 +2,9 @@
 
 #include "config/ConfigStore.hpp"
 
+#include <fstream>
+#include <sstream>
+
 AiClientConfig AiClientConfig::from_store(const ConfigStore& store) {
     AiClientConfig c;
     c.api_key = store.resolve("OPENAI_API_KEY");
@@ -38,6 +41,16 @@ AiClientConfig AiClientConfig::from_store(const ConfigStore& store) {
 
 AiClientConfig AiClientConfig::from_default_config() {
     return from_store(ConfigStore::load_default());
+}
+
+std::string AiClientConfig::load_system_prompt(const std::string& path) {
+    std::ifstream in(path);
+    if (!in) {
+        return {};
+    }
+    std::ostringstream buf;
+    buf << in.rdbuf();
+    return buf.str();
 }
 
 bool AiClientConfig::ready() const {

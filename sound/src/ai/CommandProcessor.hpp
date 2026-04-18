@@ -25,5 +25,6 @@ public:
 private:
     AiClientConfig config_;
     std::optional<Action> match_local_(const std::string& normalized) const;
+    std::string build_chat_body_(const std::string& user_text) const;
     Action call_external_api_(const std::string& user_text) const;
 };

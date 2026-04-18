@@ -4,21 +4,16 @@
 #include "actions/ExternalApiAction.hpp"
 #include "actions/MusicAction.hpp"
 #include "actions/TopicSearchAction.hpp"
+#include "ai/HttpClient.hpp"
 #include "ai/OpenAiChatContent.hpp"
 
 #include <algorithm>
 #include <cctype>
 #include <future>
 #include <iomanip>
-#include <memory>
-#include <mutex>
 #include <regex>
 #include <sstream>
 #include <iostream>
-
-#ifdef HECQUIN_WITH_CURL
-#include <curl/curl.h>
-#endif
 
 namespace {
 
@@ -57,25 +52,6 @@ std::string json_escape(const std::string& s) {
     return out;
 }
 
-#ifdef HECQUIN_WITH_CURL
-size_t curl_write_string(char* ptr, size_t size, size_t nmemb, void* userdata) {
-    auto* out = static_cast<std::string*>(userdata);
-    out->append(ptr, size * nmemb);
-    return size * nmemb;
-}
-
-struct CurlEasyDeleter {
-    void operator()(CURL* c) const noexcept { curl_easy_cleanup(c); }
-};
-
-struct CurlSlistDeleter {
-    void operator()(curl_slist* s) const noexcept { curl_slist_free_all(s); }
-};
-
-using CurlEasyPtr = std::unique_ptr<CURL, CurlEasyDeleter>;
-using CurlSlistPtr = std::unique_ptr<curl_slist, CurlSlistDeleter>;
-#endif
-
 } // namespace
 
 CommandProcessor::CommandProcessor(AiClientConfig config) : config_(std::move(config)) {}
@@ -113,74 +89,39 @@ std::optional<Action> CommandProcessor::match_local_(const std::string& n) const
     return std::nullopt;
 }
 
+std::string CommandProcessor::build_chat_body_(const std::string& user_text) const {
+    return std::string("{\"model\":\"") + json_escape(config_.model) +
+           "\",\"messages\":["
+           "{\"role\":\"system\",\"content\":\"" + json_escape(config_.system_prompt) + "\"},"
+           "{\"role\":\"user\",\"content\":\"" + json_escape(user_text) +
+           "\"}]}";
+}
+
 Action CommandProcessor::call_external_api_(const std::string& user_text) const {
-#ifndef HECQUIN_WITH_CURL
-    return ExternalApiAction::with_reply(
-        "External API is unavailable in this build (libcurl not found at configure time).", user_text);
-#else
     if (!config_.ready()) {
         return ExternalApiAction::with_reply(
             "Set OPENAI_API_KEY, HECQUIN_AI_API_KEY, GEMINI_API_KEY, or GOOGLE_API_KEY for cloud replies.",
             user_text);
     }
 
-    static std::once_flag curl_init_once;
-    std::call_once(curl_init_once, []() { curl_global_init(CURL_GLOBAL_DEFAULT); });
+    const std::string body = build_chat_body_(user_text);
+    const auto result = http_post_json(config_.chat_completions_url, config_.api_key, body);
 
-    static constexpr const char* kSystemPrompt =
-        "You are a voice assistant on a smart speaker. "
-        "Reply in 1-3 short sentences using plain spoken language. "
-        "No markdown, no bullet points, no lists, no special formatting.";
-
-    const std::string body = std::string("{\"model\":\"") + json_escape(config_.model) +
-                             "\",\"messages\":["
-                             "{\"role\":\"system\",\"content\":\"" + json_escape(kSystemPrompt) + "\"},"
-                             "{\"role\":\"user\",\"content\":\"" + json_escape(user_text) +
-                             "\"}]}";
-
-    std::string response;
-    CurlEasyPtr curl(curl_easy_init());
-    if (!curl) {
-        return ExternalApiAction::with_reply("Failed to initialize HTTP client.", user_text);
+    if (!result) {
+        return ExternalApiAction::with_reply("HTTP request failed.", user_text);
     }
 
-    curl_slist* header_list = nullptr;
-    header_list = curl_slist_append(header_list, "Content-Type: application/json");
-    const std::string auth = "Authorization: Bearer " + config_.api_key;
-    header_list = curl_slist_append(header_list, auth.c_str());
-    CurlSlistPtr headers(header_list);
-
-    std::cout << "api_key: " << config_.api_key << std::endl;
-    std::cout << "chat_completions_url: " << config_.chat_completions_url << std::endl;
-    std::cout << "body: " << body << std::endl;
-
-    curl_easy_setopt(curl.get(), CURLOPT_URL, config_.chat_completions_url.c_str());
-    curl_easy_setopt(curl.get(), CURLOPT_HTTPHEADER, headers.get());
-    curl_easy_setopt(curl.get(), CURLOPT_POSTFIELDS, body.c_str());
-    curl_easy_setopt(curl.get(), CURLOPT_POSTFIELDSIZE, static_cast<long>(body.size()));
-    curl_easy_setopt(curl.get(), CURLOPT_WRITEFUNCTION, curl_write_string);
-    curl_easy_setopt(curl.get(), CURLOPT_WRITEDATA, &response);
-    curl_easy_setopt(curl.get(), CURLOPT_TIMEOUT, 60L);
-
-    const CURLcode res = curl_easy_perform(curl.get());
-    long http_code = 0;
-    curl_easy_getinfo(curl.get(), CURLINFO_RESPONSE_CODE, &http_code);
-
-    if (res != CURLE_OK) {
-        return ExternalApiAction::with_reply(std::string("Request failed: ") + curl_easy_strerror(res), user_text);
+    if (result->status < 200 || result->status >= 300) {
+        return ExternalApiAction::with_reply(
+            "API error HTTP " + std::to_string(result->status) + ": " + result->body.substr(0, 500),
+            user_text);
     }
 
-    if (http_code < 200 || http_code >= 300) {
-        return ExternalApiAction::with_reply("API error HTTP " + std::to_string(http_code) + ": " + response.substr(0, 500),
-                                             user_text);
-    }
-
-    const auto content = extract_openai_chat_assistant_content(response);
+    const auto content = extract_openai_chat_assistant_content(result->body);
     if (!content) {
         return ExternalApiAction::with_reply("Could not parse model reply.", user_text);
     }
     return ExternalApiAction::with_reply(*content, user_text);
-#endif
 }
 
 Action CommandProcessor::process(const std::string& transcript) {
