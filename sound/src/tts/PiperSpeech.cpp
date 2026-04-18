@@ -230,6 +230,7 @@ bool sdl_play_s16_mono_22k(const std::vector<int16_t>& samples) {
 }
 
 bool piper_speak_and_play(const std::string& text, const std::string& model_path) {
+    std::cout << "🗣️  Piper sẽ nói: " << text << std::endl ;
     const std::string temp_wav = piper_temp_wav_path();
     if (!piper_synthesize_wav(text, model_path, temp_wav)) {
         return false;

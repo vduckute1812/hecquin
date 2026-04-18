@@ -5,6 +5,7 @@
 #include <cmath>
 #include <future>
 #include <iostream>
+#include <regex>
 #include <thread>
 
 VoiceListener::VoiceListener(WhisperEngine& whisper,
@@ -40,11 +41,17 @@ bool VoiceListener::voiceActive(const std::vector<float>& samples) const {
 }
 
 std::string VoiceListener::sanitizeForTts(std::string s) {
-    for (char& c : s) {
-        if (c == '\n' || c == '\r' || c == '\t') {
-            c = ' ';
-        }
-    }
+    s = std::regex_replace(s, std::regex(R"(\*{1,3})"), "");
+    s = std::regex_replace(s, std::regex(R"(^#{1,6}\s+)", std::regex_constants::multiline), "");
+    s = std::regex_replace(s, std::regex(R"(^[\-\*]\s+)", std::regex_constants::multiline), "");
+    s = std::regex_replace(s, std::regex(R"(^\d+\.\s+)", std::regex_constants::multiline), "");
+    s = std::regex_replace(s, std::regex(R"(`([^`]+)`)"), "$1");
+    s = std::regex_replace(s, std::regex(R"([\r\n\t]+)"), " ");
+    s = std::regex_replace(s, std::regex(R"( {2,})"), " ");
+
+    auto not_space = [](unsigned char c) { return !std::isspace(c); };
+    s.erase(s.begin(), std::find_if(s.begin(), s.end(), not_space));
+    s.erase(std::find_if(s.rbegin(), s.rend(), not_space).base(), s.end());
     return s;
 }
 

@@ -127,8 +127,15 @@ Action CommandProcessor::call_external_api_(const std::string& user_text) const 
     static std::once_flag curl_init_once;
     std::call_once(curl_init_once, []() { curl_global_init(CURL_GLOBAL_DEFAULT); });
 
+    static constexpr const char* kSystemPrompt =
+        "You are a voice assistant on a smart speaker. "
+        "Reply in 1-3 short sentences using plain spoken language. "
+        "No markdown, no bullet points, no lists, no special formatting.";
+
     const std::string body = std::string("{\"model\":\"") + json_escape(config_.model) +
-                             "\",\"messages\":[{\"role\":\"user\",\"content\":\"" + json_escape(user_text) +
+                             "\",\"messages\":["
+                             "{\"role\":\"system\",\"content\":\"" + json_escape(kSystemPrompt) + "\"},"
+                             "{\"role\":\"user\",\"content\":\"" + json_escape(user_text) +
                              "\"}]}";
 
     std::string response;

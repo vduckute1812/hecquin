@@ -3,6 +3,7 @@
 #include "actions/Action.hpp"
 
 #include <string>
+#include <iostream>
 
 enum class DevicePowerVerb { TurnOn, TurnOff };
 

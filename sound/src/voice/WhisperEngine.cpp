@@ -2,6 +2,8 @@
 
 #include "whisper.h"
 
+#include <algorithm>
+#include <array>
 #include <cstring>
 #include <iostream>
 
@@ -59,5 +61,20 @@ std::string WhisperEngine::transcribe(const std::vector<float>& samples) {
         }
     }
     std::cout << std::endl;
+
+    static constexpr std::array kNoiseTokens = {
+        "[BLANK_AUDIO]",
+        "(blank_audio)",
+        "[NO_SPEECH]",
+        "(no speech)",
+        "[ Inaudible Remark ]",
+        "[inaudible]",
+    };
+    for (const char* tok : kNoiseTokens) {
+        if (joined.find(tok) != std::string::npos) {
+            return {};
+        }
+    }
+
     return joined;
 }
