@@ -73,7 +73,7 @@ void VoiceListener::speakReply(const Action& action) {
     capture_.resumeDevice();
 }
 
-Action VoiceListener::routeTranscript_(const std::string& transcript) {
+Action VoiceListener::routeTranscript(const std::string& transcript) {
     // Always give the fast local matcher a chance first — this is what lets the user
     // switch modes by voice ("start english lesson" / "exit lesson") from either side.
     if (auto local = commands_.match_local(transcript)) {
@@ -132,7 +132,7 @@ void VoiceListener::run() {
                 const std::string transcript = whisper_.transcribe(live);
                 if (!transcript.empty()) {
                     std::future<Action> fut = std::async(std::launch::async,
-                        [this, transcript]() { return routeTranscript_(transcript); });
+                        [this, transcript]() { return routeTranscript(transcript); });
                     speakReply(fut.get());
                     std::cout << std::endl;
                 }

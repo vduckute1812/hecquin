@@ -4,7 +4,9 @@
 #include <string>
 
 /**
- * Best-effort read of the first `"content"` string after `"choices"` / `"message"` in a chat completion JSON body.
- * Handles common `\\` escapes and `\\uXXXX` (BMP only; paired UTF-16 surrogates are not merged).
+ * Extract the assistant's text from an OpenAI-compatible chat completion body
+ * (`choices[0].message.content`).  Returns `nullopt` on parse error, missing
+ * fields, or non-string content.  Implemented with a real JSON parser so
+ * nested `"content"` keys (e.g. tool-call messages) do not fool the scan.
  */
 std::optional<std::string> extract_openai_chat_assistant_content(const std::string& json_body);

@@ -1,18 +1,14 @@
 #include "config/ConfigStore.hpp"
 
-#include <algorithm>
-#include <cctype>
+#include "common/StringUtils.hpp"
+
 #include <cstdlib>
 #include <fstream>
 
 namespace {
 
-std::string trim_copy(std::string s) {
-    auto not_space = [](unsigned char c) { return !std::isspace(c); };
-    s.erase(s.begin(), std::find_if(s.begin(), s.end(), not_space));
-    s.erase(std::find_if(s.rbegin(), s.rend(), not_space).base(), s.end());
-    return s;
-}
+using hecquin::common::starts_with;
+using hecquin::common::trim_copy;
 
 std::string getenv_string(const char* key) {
     const char* v = std::getenv(key);
@@ -43,7 +39,7 @@ std::unordered_map<std::string, std::string> parse_env_file(const char* path) {
         if (line.empty() || line[0] == '#') {
             continue;
         }
-        if (line.rfind("export ", 0) == 0) {
+        if (starts_with(line, "export ")) {
             line = trim_copy(line.substr(7));
         }
         const size_t eq = line.find('=');

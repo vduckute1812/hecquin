@@ -2,31 +2,24 @@
 
 #include "learning/EmbeddingClient.hpp"
 #include "learning/LearningStore.hpp"
+#include "learning/TextChunker.hpp"
 
 #include <algorithm>
 #include <cctype>
 #include <chrono>
 #include <cstdint>
-#include <dirent.h>
+#include <filesystem>
 #include <fstream>
 #include <iomanip>
 #include <iostream>
 #include <sstream>
-#include <sys/stat.h>
+#include <system_error>
 
 namespace hecquin::learning {
 
+namespace fs = std::filesystem;
+
 namespace {
-
-bool path_exists(const std::string& p) {
-    struct stat st{};
-    return stat(p.c_str(), &st) == 0;
-}
-
-bool is_dir(const std::string& p) {
-    struct stat st{};
-    return stat(p.c_str(), &st) == 0 && S_ISDIR(st.st_mode);
-}
 
 std::string read_file(const std::string& path) {
     std::ifstream in(path, std::ios::binary);
@@ -49,22 +42,17 @@ std::string content_fingerprint(const std::string& content) {
 }
 
 std::string kind_from_dir(const std::string& dir_name) {
-    if (dir_name.find("vocab") != std::string::npos) return "vocabulary";
+    if (dir_name.find("vocab")   != std::string::npos) return "vocabulary";
     if (dir_name.find("grammar") != std::string::npos) return "grammar";
-    if (dir_name.find("dict") != std::string::npos) return "dictionary";
-    if (dir_name.find("reader") != std::string::npos) return "readers";
+    if (dir_name.find("dict")    != std::string::npos) return "dictionary";
+    if (dir_name.find("reader")  != std::string::npos) return "readers";
     return "curriculum";
 }
 
-std::string file_basename(const std::string& path) {
-    const auto slash = path.find_last_of('/');
-    return slash == std::string::npos ? path : path.substr(slash + 1);
-}
-
-std::string file_extension(const std::string& name) {
-    const auto dot = name.find_last_of('.');
-    if (dot == std::string::npos) return {};
-    std::string ext = name.substr(dot + 1);
+/** Lower-cased file extension without the leading '.'. */
+std::string file_extension_lower(const fs::path& p) {
+    std::string ext = p.extension().string();
+    if (!ext.empty() && ext.front() == '.') ext.erase(0, 1);
     std::transform(ext.begin(), ext.end(), ext.begin(),
                    [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
     return ext;
@@ -72,56 +60,9 @@ std::string file_extension(const std::string& name) {
 
 bool is_text_extension(const std::string& ext) {
     return ext == "txt" || ext == "md" || ext == "markdown" ||
-           ext == "json" || ext == "jsonl" || ext == "csv" || ext == "tsv" || ext == "text" ||
-           ext == "" /* allow files with no extension, e.g. README */;
-}
-
-std::vector<std::string> chunk_text(const std::string& text, int chunk_chars, int overlap) {
-    std::vector<std::string> out;
-    if (text.empty()) return out;
-    if (chunk_chars <= 0) chunk_chars = 1800;
-    if (overlap < 0) overlap = 0;
-    if (overlap >= chunk_chars) overlap = chunk_chars / 4;
-
-    const size_t step = static_cast<size_t>(chunk_chars - overlap);
-    for (size_t i = 0; i < text.size(); i += step) {
-        size_t end = std::min(text.size(), i + static_cast<size_t>(chunk_chars));
-        // Prefer to break on whitespace if possible.
-        if (end < text.size()) {
-            size_t soft = end;
-            while (soft > i + static_cast<size_t>(chunk_chars / 2) &&
-                   !std::isspace(static_cast<unsigned char>(text[soft]))) {
-                --soft;
-            }
-            if (soft > i + static_cast<size_t>(chunk_chars / 2)) {
-                end = soft;
-            }
-        }
-        std::string piece = text.substr(i, end - i);
-        // Trim.
-        size_t a = 0, b = piece.size();
-        while (a < b && std::isspace(static_cast<unsigned char>(piece[a]))) ++a;
-        while (b > a && std::isspace(static_cast<unsigned char>(piece[b - 1]))) --b;
-        if (b > a) out.emplace_back(piece.substr(a, b - a));
-        if (end >= text.size()) break;
-    }
-    return out;
-}
-
-void list_files_recursive(const std::string& root, std::vector<std::string>& out) {
-    DIR* dir = opendir(root.c_str());
-    if (!dir) return;
-    while (auto* ent = readdir(dir)) {
-        const std::string name = ent->d_name;
-        if (name == "." || name == "..") continue;
-        std::string path = root + "/" + name;
-        if (is_dir(path)) {
-            list_files_recursive(path, out);
-        } else {
-            out.push_back(path);
-        }
-    }
-    closedir(dir);
+           ext == "json" || ext == "jsonl" || ext == "csv" || ext == "tsv" ||
+           ext == "text" ||
+           ext.empty();  // allow extensionless files (README, etc.)
 }
 
 } // namespace
@@ -138,19 +79,30 @@ struct PlannedFile {
 
 void collect_files(const std::string& dir, const std::string& default_kind,
                    std::vector<PlannedFile>& out) {
-    if (!path_exists(dir)) return;
-    std::vector<std::string> files;
-    list_files_recursive(dir, files);
-    for (const auto& path : files) {
-        const std::string ext = file_extension(file_basename(path));
+    std::error_code ec;
+    if (dir.empty() || !fs::exists(dir, ec) || !fs::is_directory(dir, ec)) return;
+
+    const fs::path root = dir;
+    for (fs::recursive_directory_iterator it(root, fs::directory_options::skip_permission_denied, ec),
+                                          end;
+         it != end;
+         it.increment(ec)) {
+        if (ec) { ec.clear(); continue; }
+        if (!it->is_regular_file(ec)) continue;
+        const fs::path& p = it->path();
+        const std::string ext = file_extension_lower(p);
         if (!is_text_extension(ext)) continue;
+
         std::string kind = default_kind;
         if (kind.empty()) {
-            const std::string rel = path.substr(dir.size() + (dir.empty() ? 0 : 1));
-            const auto slash = rel.find('/');
-            kind = kind_from_dir(slash == std::string::npos ? rel : rel.substr(0, slash));
+            const fs::path rel = fs::relative(p, root, ec);
+            const std::string first =
+                rel.empty() || rel.begin() == rel.end()
+                    ? std::string{}
+                    : rel.begin()->string();
+            kind = kind_from_dir(first);
         }
-        out.push_back({path, kind});
+        out.push_back({p.string(), kind});
     }
 }
 
@@ -244,7 +196,7 @@ void Ingestor::ingest_file_(const std::string& path, const std::string& kind,
         return;
     }
 
-    const std::string title = file_basename(path);
+    const std::string title = fs::path(path).filename().string();
     const auto chunks = chunk_text(content, cfg_.chunk_chars, cfg_.chunk_overlap_chars);
     if (chunks.empty()) {
         ++report.files_skipped;
@@ -257,50 +209,64 @@ void Ingestor::ingest_file_(const std::string& path, const std::string& kind,
               << content.size() << " bytes)" << std::endl;
 
     const auto t_file_start = clock::now();
-    // Emit a heartbeat line at most every ~2s, and always at the first / last chunk.
-    auto t_last_tick = t_file_start;
-    const double tick_interval_sec = 2.0;
+    const int batch_size = std::max(1, cfg_.embed_batch_size);
 
-    int ok = 0;
-    for (size_t i = 0; i < chunks.size(); ++i) {
-        auto emb = embed_.embed(chunks[i]);
-        if (!emb) {
-            ++report.chunks_failed;
-        } else {
+    // Persist one batch + write its rows; returns #successful upserts.
+    auto persist_batch = [&](size_t batch_start, const std::vector<std::string>& slice,
+                             const std::vector<std::vector<float>>& embeddings,
+                             int& ok_ref) {
+        for (size_t j = 0; j < slice.size(); ++j) {
             DocumentRecord rec;
             rec.source = path;
             rec.kind = kind;
-            rec.title = title + "#" + std::to_string(i + 1);
-            rec.body = chunks[i];
-            rec.metadata_json = "{\"chunk_index\":" + std::to_string(i) +
+            rec.title = title + "#" + std::to_string(batch_start + j + 1);
+            rec.body = slice[j];
+            rec.metadata_json = "{\"chunk_index\":" + std::to_string(batch_start + j) +
                                 ",\"chunks_total\":" + std::to_string(chunks.size()) + "}";
-            if (store_.upsert_document(rec, *emb)) {
-                ++ok;
+            if (store_.upsert_document(rec, embeddings[j])) {
+                ++ok_ref;
                 ++report.chunks_written;
             } else {
                 ++report.chunks_failed;
             }
         }
+    };
+
+    int ok = 0;
+    for (size_t i = 0; i < chunks.size(); i += static_cast<size_t>(batch_size)) {
+        const size_t end = std::min(chunks.size(), i + static_cast<size_t>(batch_size));
+        const std::vector<std::string> slice(chunks.begin() + i, chunks.begin() + end);
+
+        const auto batch_embed = embed_.embed_many(slice);
+        if (batch_embed && batch_embed->size() == slice.size()) {
+            persist_batch(i, slice, *batch_embed, ok);
+        } else {
+            // Fall back to per-chunk so a single bad chunk doesn't tank the file.
+            for (size_t j = 0; j < slice.size(); ++j) {
+                auto single = embed_.embed(slice[j]);
+                if (!single) {
+                    ++report.chunks_failed;
+                    continue;
+                }
+                persist_batch(i + j, {slice[j]}, {*single}, ok);
+            }
+        }
 
         const auto now = clock::now();
-        const double since_tick = std::chrono::duration<double>(now - t_last_tick).count();
-        const bool is_last = (i + 1 == chunks.size());
-        if (is_last || since_tick >= tick_interval_sec) {
-            const double elapsed = std::chrono::duration<double>(now - t_file_start).count();
-            const size_t done = i + 1;
-            const double rate = elapsed > 0.0 ? (done / elapsed) : 0.0;
-            const double eta =
-                (rate > 0.0 && done < chunks.size()) ? (chunks.size() - done) / rate : 0.0;
-            const int pct =
-                chunks.size() > 0 ? static_cast<int>((100.0 * done) / chunks.size()) : 100;
-            std::cerr << prefix << "  chunk " << done << "/" << chunks.size()
-                      << " (" << pct << "%) ok=" << ok
-                      << " fail=" << report.chunks_failed
-                      << " elapsed=" << format_duration(elapsed);
-            if (!is_last) std::cerr << " eta=" << format_duration(eta);
-            std::cerr << std::endl;
-            t_last_tick = now;
-        }
+        const double elapsed = std::chrono::duration<double>(now - t_file_start).count();
+        const size_t done = end;
+        const double rate = elapsed > 0.0 ? (done / elapsed) : 0.0;
+        const double eta =
+            (rate > 0.0 && done < chunks.size()) ? (chunks.size() - done) / rate : 0.0;
+        const int pct =
+            chunks.size() > 0 ? static_cast<int>((100.0 * done) / chunks.size()) : 100;
+        const bool is_last = (done == chunks.size());
+        std::cerr << prefix << "  chunk " << done << "/" << chunks.size()
+                  << " (" << pct << "%) ok=" << ok
+                  << " fail=" << report.chunks_failed
+                  << " elapsed=" << format_duration(elapsed);
+        if (!is_last) std::cerr << " eta=" << format_duration(eta);
+        std::cerr << std::endl;
     }
     if (ok > 0) {
         store_.record_ingested_file(path, hash);

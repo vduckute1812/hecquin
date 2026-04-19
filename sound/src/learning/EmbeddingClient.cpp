@@ -1,109 +1,92 @@
 #include "learning/EmbeddingClient.hpp"
 
-#include "ai/HttpClient.hpp"
+#include "ai/IHttpClient.hpp"
 
-#include <cctype>
-#include <cstdlib>
-#include <iomanip>
+#include <nlohmann/json.hpp>
+
+#include <algorithm>
 #include <iostream>
-#include <sstream>
 
 namespace hecquin::learning {
 
-namespace {
+using nlohmann::json;
 
-std::string json_escape(const std::string& s) {
-    std::string out;
-    out.reserve(s.size() + 8);
-    for (unsigned char c : s) {
-        switch (c) {
-            case '\\': out += "\\\\"; break;
-            case '"':  out += "\\\""; break;
-            case '\n': out += "\\n"; break;
-            case '\r': out += "\\r"; break;
-            case '\t': out += "\\t"; break;
-            default:
-                if (c < 0x20) {
-                    std::ostringstream oss;
-                    oss << "\\u" << std::hex << std::setw(4) << std::setfill('0') << static_cast<int>(c);
-                    out += oss.str();
-                } else {
-                    out += static_cast<char>(c);
-                }
-        }
-    }
-    return out;
-}
+EmbeddingClient::EmbeddingClient(AiClientConfig config)
+    : config_(std::move(config)),
+      owned_http_(std::make_unique<hecquin::ai::CurlHttpClient>()),
+      http_(owned_http_.get()) {}
 
-/**
- * Finds the first `"embedding"` key that is followed by a JSON array of numbers
- * anywhere in `body`, and returns the parsed floats.  The OpenAI reply shape is:
- *   { "data": [ { "embedding": [ ... ], ... } ], ... }
- */
-std::optional<std::vector<float>> extract_embedding_array(const std::string& body) {
-    constexpr const char* kKey = "\"embedding\"";
-    size_t pos = body.find(kKey);
-    if (pos == std::string::npos) return std::nullopt;
-    pos = body.find('[', pos + 11);
-    if (pos == std::string::npos) return std::nullopt;
-    ++pos;
+EmbeddingClient::EmbeddingClient(AiClientConfig config, hecquin::ai::IHttpClient& http)
+    : config_(std::move(config)),
+      owned_http_(nullptr),
+      http_(&http) {}
 
-    std::vector<float> out;
-    std::string num;
-    num.reserve(32);
-
-    auto flush = [&]() {
-        if (num.empty()) return;
-        try {
-            out.push_back(std::stof(num));
-        } catch (...) {
-        }
-        num.clear();
-    };
-
-    for (; pos < body.size(); ++pos) {
-        const char c = body[pos];
-        if (c == ']') { flush(); break; }
-        if (c == ',' || std::isspace(static_cast<unsigned char>(c))) {
-            flush();
-            continue;
-        }
-        if (std::isdigit(static_cast<unsigned char>(c)) || c == '-' || c == '+' ||
-            c == '.' || c == 'e' || c == 'E') {
-            num.push_back(c);
-        }
-    }
-
-    if (out.empty()) return std::nullopt;
-    return out;
-}
-
-} // namespace
-
-EmbeddingClient::EmbeddingClient(AiClientConfig config) : config_(std::move(config)) {}
+EmbeddingClient::~EmbeddingClient() = default;
 
 bool EmbeddingClient::ready() const {
 #ifdef HECQUIN_WITH_CURL
-    return !config_.api_key.empty() && !config_.embeddings_url.empty();
+    return http_ != nullptr && !config_.api_key.empty() && !config_.embeddings_url.empty();
 #else
-    return false;
+    return http_ != nullptr && owned_http_ == nullptr &&
+           !config_.api_key.empty() && !config_.embeddings_url.empty();
 #endif
 }
 
-std::optional<std::vector<float>> EmbeddingClient::embed(const std::string& text) const {
-    if (!ready()) return std::nullopt;
-
-    // gemini-embedding-001 natively returns 3072-dim vectors; the OpenAI-compat
-    // endpoint honours a "dimensions" override so we can keep the configured
-    // schema stable (e.g. 768) without re-provisioning the vec0 table.
-    std::string body = std::string("{\"model\":\"") + json_escape(config_.embedding_model) +
-                       "\",\"input\":\"" + json_escape(text) + "\"";
-    if (config_.embedding_dim > 0) {
-        body += ",\"dimensions\":" + std::to_string(config_.embedding_dim);
+std::string EmbeddingClient::build_request_body(const std::string& model,
+                                                const std::vector<std::string>& texts,
+                                                int embedding_dim) {
+    json body = {
+        {"model", model},
+        {"input", texts},
+    };
+    if (embedding_dim > 0) {
+        // gemini-embedding-001 natively returns 3072-dim vectors; the OpenAI
+        // layer honours `dimensions` so we can keep the vec0 schema stable.
+        body["dimensions"] = embedding_dim;
     }
-    body += "}";
+    return body.dump();
+}
 
-    const auto result = http_post_json(config_.embeddings_url, config_.api_key, body);
+std::optional<std::vector<std::vector<float>>>
+EmbeddingClient::parse_response(const std::string& body, size_t expected_count, int expected_dim) {
+    std::vector<std::vector<float>> out;
+    out.reserve(expected_count);
+    try {
+        const json parsed = json::parse(body);
+        const auto& data = parsed.at("data");
+        if (!data.is_array()) return std::nullopt;
+        for (const auto& row : data) {
+            const auto& emb = row.at("embedding");
+            if (!emb.is_array()) return std::nullopt;
+            std::vector<float> vec;
+            vec.reserve(emb.size());
+            for (const auto& x : emb) vec.push_back(static_cast<float>(x.get<double>()));
+            if (expected_dim > 0 && static_cast<int>(vec.size()) != expected_dim) {
+                return std::nullopt;
+            }
+            out.push_back(std::move(vec));
+        }
+    } catch (const std::exception&) {
+        return std::nullopt;
+    }
+    if (expected_count > 0 && out.size() != expected_count) return std::nullopt;
+    return out;
+}
+
+std::optional<std::vector<float>> EmbeddingClient::embed(const std::string& text) const {
+    auto many = embed_many({text});
+    if (!many || many->empty()) return std::nullopt;
+    return std::move((*many)[0]);
+}
+
+std::optional<std::vector<std::vector<float>>>
+EmbeddingClient::embed_many(const std::vector<std::string>& texts) const {
+    if (!ready() || texts.empty()) return std::nullopt;
+
+    const std::string body =
+        build_request_body(config_.embedding_model, texts, config_.embedding_dim);
+
+    const auto result = http_->post_json(config_.embeddings_url, config_.api_key, body);
     if (!result) {
         std::cerr << "[EmbeddingClient] transport failure" << std::endl;
         return std::nullopt;
@@ -114,27 +97,30 @@ std::optional<std::vector<float>> EmbeddingClient::embed(const std::string& text
         return std::nullopt;
     }
 
-    auto vec = extract_embedding_array(result->body);
-    if (!vec) {
-        std::cerr << "[EmbeddingClient] could not parse embedding from body: "
+    auto parsed = parse_response(result->body, texts.size(), config_.embedding_dim);
+    if (!parsed) {
+        std::cerr << "[EmbeddingClient] could not parse response\n  body: "
                   << result->body.substr(0, 200) << std::endl;
         return std::nullopt;
     }
-    if (config_.embedding_dim > 0 && static_cast<int>(vec->size()) != config_.embedding_dim) {
-        std::cerr << "[EmbeddingClient] dim mismatch (got " << vec->size()
-                  << ", expected " << config_.embedding_dim << ")" << std::endl;
-    }
-    return vec;
+    return parsed;
 }
 
 std::optional<std::vector<std::vector<float>>>
-EmbeddingClient::embed_batch(const std::vector<std::string>& texts) const {
+EmbeddingClient::embed_batch(const std::vector<std::string>& texts, int batch_size) const {
+    if (texts.empty()) return std::vector<std::vector<float>>{};
+    if (batch_size <= 0 || static_cast<int>(texts.size()) <= batch_size) {
+        return embed_many(texts);
+    }
+
     std::vector<std::vector<float>> out;
     out.reserve(texts.size());
-    for (const auto& t : texts) {
-        auto e = embed(t);
-        if (!e) return std::nullopt;
-        out.push_back(std::move(*e));
+    for (size_t i = 0; i < texts.size(); i += static_cast<size_t>(batch_size)) {
+        const size_t end = std::min(texts.size(), i + static_cast<size_t>(batch_size));
+        std::vector<std::string> slice(texts.begin() + i, texts.begin() + end);
+        auto part = embed_many(slice);
+        if (!part) return std::nullopt;
+        for (auto& v : *part) out.push_back(std::move(v));
     }
     return out;
 }

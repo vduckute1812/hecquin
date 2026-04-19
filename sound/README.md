@@ -40,35 +40,58 @@ sound/
 │   │   ├── AudioCapture.hpp
 │   │   ├── WhisperEngine.cpp
 │   │   └── WhisperEngine.hpp
+│   │   ├── VoiceApp.cpp          # Shared bootstrap (config + whisper + capture)
+│   │   └── VoiceApp.hpp
 │   ├── config/              # Env / defaults (`ConfigStore`, `AppConfig`, …)
 │   │   └── ai/              # `AiClientConfig` (API keys, model, base URL)
 │   ├── actions/             # Routed intents → `Action` (`Action.hpp`, `*Action.hpp`, …)
-│   ├── ai/                  # `CommandProcessor` + HTTP client + response parsing
-│   │   ├── CommandProcessor.cpp
-│   │   ├── CommandProcessor.hpp
-│   │   ├── HttpClient.cpp
-│   │   ├── HttpClient.hpp
-│   │   ├── OpenAiChatContent.cpp
-│   │   └── OpenAiChatContent.hpp
+│   ├── ai/                  # HTTP client + intent matcher + chat + command facade
+│   │   ├── IHttpClient.hpp        # Abstract HTTP (testable)
+│   │   ├── HttpClient.hpp/.cpp    # libcurl `http_post_json` + `CurlHttpClient`
+│   │   ├── OpenAiChatContent.*    # nlohmann/json response extractor
+│   │   ├── LocalIntentMatcher.*   # Regex-based local intents
+│   │   ├── ChatClient.*           # Remote LLM client (IHttpClient injected)
+│   │   └── CommandProcessor.*     # Facade composing matcher + chat
+│   ├── common/              # Header-only utilities
+│   │   └── StringUtils.hpp        # `trim_copy`, `to_lower_copy`, `starts_with`
+│   ├── learning/            # Vector DB, ingestion, RAG, tutor processor
+│   │   ├── LearningStore.*        # SQLite + sqlite-vec store
+│   │   ├── EmbeddingClient.*      # Gemini embeddings (OpenAI-compat, batched)
+│   │   ├── Ingestor.*             # Curriculum → chunks → embeddings
+│   │   ├── TextChunker.*          # Standalone chunking utility
+│   │   ├── RetrievalService.*     # Vector search helpers
+│   │   ├── ProgressTracker.*      # Per-user learning log
+│   │   ├── EnglishTutorProcessor.*# RAG + grammar correction
+│   │   └── cli/                   # `english_ingest`, `english_tutor`
 │   ├── tts/                 # Piper + SDL playback (static lib)
 │   │   ├── PiperSpeech.cpp
 │   │   └── PiperSpeech.hpp
 │   └── cli/                 # Standalone TTS executable entry
 │       └── TextToSpeech.cpp
-├── tests/                   # Small unit tests (optional CMake target)
-│   └── test_openai_chat_content.cpp
+├── tests/                   # Unit tests (CMake + CTest)
+│   ├── test_openai_chat_content.cpp
+│   ├── test_local_intent_matcher.cpp
+│   ├── test_embedding_client_json.cpp
+│   ├── test_text_chunker.cpp
+│   ├── test_config_store.cpp
+│   └── test_learning_store.cpp
 ├── cmake/
 │   ├── project_options.cmake      # Compiler flags (C++17)
+│   ├── adhoc_codesign.cmake       # macOS ad-hoc signing helper
 │   ├── deps_whisper.cmake         # Whisper discovery
 │   ├── deps_piper.cmake           # Piper TTS discovery
 │   ├── deps_sdl2.cmake            # SDL2 discovery
-│   ├── deps_curl.cmake            # libcurl (optional) for external AI
+│   ├── deps_curl.cmake            # libcurl (required for AI + embeddings)
+│   ├── deps_json.cmake            # Vendor nlohmann/json header
+│   ├── deps_sqlite_vec.cmake      # SQLite + sqlite-vec vector extension
 │   ├── dependency_libraries.cmake # Interface libraries
-│   ├── targets.cmake              # Build targets
-│   ├── voice_to_text.cmake        # Voice detector target
-│   ├── text_to_speech.cmake       # TTS target
-│   ├── sound_tests.cmake          # `hecquin_sound_test_openai_chat` + CTest
-│   └── piper_speech.cmake         # Static lib hecquin_piper_speech
+│   ├── sound_libs.cmake           # Internal static libs (config/ai/voice/learning)
+│   ├── targets.cmake              # Aggregates executable targets
+│   ├── voice_to_text.cmake        # `voice_detector` executable
+│   ├── english_tutor.cmake        # `english_ingest` + `english_tutor` executables
+│   ├── text_to_speech.cmake       # `text_to_speech` executable
+│   ├── sound_tests.cmake          # CTest unit tests
+│   └── piper_speech.cmake         # Static lib `hecquin_piper_speech`
 ├── scripts/
 │   ├── dev_project.sh          # Project build helpers
 │   ├── dev_whisper.sh          # Whisper setup helpers
@@ -262,6 +285,13 @@ export HECQUIN_AI_MODEL="gemini-2.5-flash-lite"
 ```
 
 Then run `./dev.sh run voice_detector` as usual. The same variables work if you prefer `HECQUIN_AI_API_KEY` instead of `GEMINI_API_KEY`.
+
+#### Secrets policy
+
+- `.env/` is gitignored at the repo root — **never commit** API keys, even if the directory looks local.
+- Treat `.env/config.env` as a secret file: if the key appears in a screenshot, chat log, issue, or terminal transcript, **rotate it immediately** in [Google AI Studio](https://aistudio.google.com/apikey) and delete the old one.
+- Prefer the shell environment (`export GEMINI_API_KEY=…`) over the file when you are on a shared machine; `ConfigStore` reads env vars first and the file only as a fallback.
+- For production / Raspberry Pi deployments, store the key in the OS keyring (`security add-generic-password` on macOS, `secret-tool store` on Linux) and export it at login, not in a checked-out file.
 
 **Responses (speech):** After routing, the assistant **Action.reply** string is sent to **Piper** (same default `.onnx` as `text_to_speech`, set at CMake configure time). While Piper runs and audio plays, **microphone capture is paused** and the capture buffer is cleared so the assistant is less likely to be re-transcribed from the speakers.
 
@@ -556,7 +586,7 @@ Transcription runs on the thread that owns the listen loop; routing to the exter
 **C++ implementation notes:**
 
 - **WhisperEngine** owns the `whisper_context` with **`std::unique_ptr`** and a custom deleter so the model is always freed on teardown. Known Whisper noise tokens (`[BLANK_AUDIO]`, `[NO_SPEECH]`, `[ Inaudible Remark ]`, etc.) are filtered out so they never reach the AI API.
-- **CommandProcessor** delegates HTTP transport to **`HttpClient`** (`http_post_json`), which owns all libcurl boilerplate. JSON body assembly lives in `build_chat_body_()`, keeping `call_external_api_()` focused on orchestration and error handling.
+- **CommandProcessor** is a thin façade composing a **`LocalIntentMatcher`** (regex-based fast-path) and a **`ChatClient`** (remote LLM). The chat client takes an **`IHttpClient`** by reference (default `CurlHttpClient`), so unit tests inject a fake transport. JSON bodies are built with **nlohmann/json**, and responses are parsed by the standalone `extract_openai_chat_assistant_content`.
 - The VAD loop polls **`AudioCapture::snapshotBuffer()`** each interval; when end-of-speech is detected, **that iteration’s snapshot** is passed to Whisper (no extra full-buffer copy on every poll while recording).
 - AI responses are sanitized for TTS (markdown stripped, whitespace normalized) before being sent to Piper.
 

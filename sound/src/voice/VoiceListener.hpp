@@ -44,10 +44,10 @@ public:
                   VoiceListenerConfig cfg = {});
 
     /** Install a lesson-mode handler. Optional — without one, lesson mode falls back to Assistant. */
-    void set_tutor_callback(TutorCallback cb) { tutor_cb_ = std::move(cb); }
+    void setTutorCallback(TutorCallback cb) { tutor_cb_ = std::move(cb); }
 
     /** Force-start in lesson mode (used by the dedicated english_tutor binary). */
-    void set_initial_mode(ListenerMode mode) { mode_ = mode; }
+    void setInitialMode(ListenerMode mode) { mode_ = mode; }
 
     void run();
 
@@ -56,7 +56,7 @@ private:
     static float rms(const std::vector<float>& samples, size_t start, size_t end);
     static std::string sanitizeForTts(std::string s);
     void speakReply(const Action& action);
-    Action routeTranscript_(const std::string& transcript);
+    Action routeTranscript(const std::string& transcript);
 
     WhisperEngine& whisper_;
     AudioCapture& capture_;

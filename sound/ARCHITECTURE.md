@@ -51,13 +51,29 @@ Speaker
 src/
 ├── voice/
 │   ├── AudioCapture.hpp/cpp      — SDL2 microphone capture
+│   ├── AudioCaptureConfig.hpp    — POD config (no SDL include)
 │   ├── WhisperEngine.hpp/cpp     — whisper.cpp inference wrapper
 │   ├── VoiceListener.hpp/cpp     — VAD + pipeline orchestration
-│   └── cli/VoiceDetector.cpp     — voice_detector executable entry point
+│   ├── VoiceApp.hpp/cpp          — shared bootstrap for voice executables
+│   └── VoiceDetector.cpp         — voice_detector executable entry point
 ├── ai/
-│   ├── CommandProcessor.hpp/cpp  — local matching + AI routing
-│   ├── HttpClient.hpp/cpp        — reusable HTTP POST (libcurl)
-│   └── OpenAiChatContent.hpp/cpp — hand-rolled OpenAI JSON parser
+│   ├── IHttpClient.hpp           — abstract HTTP transport (testable)
+│   ├── HttpClient.hpp/cpp        — libcurl `http_post_json` + `CurlHttpClient`
+│   ├── LocalIntentMatcher.hpp/cpp— regex-based local intents
+│   ├── ChatClient.hpp/cpp        — remote LLM client (IHttpClient injected)
+│   ├── CommandProcessor.hpp/cpp  — façade: matcher + chat
+│   └── OpenAiChatContent.hpp/cpp — nlohmann/json response extractor
+├── common/
+│   └── StringUtils.hpp           — header-only trim/lower/starts_with
+├── learning/
+│   ├── LearningStore.hpp/cpp     — SQLite + sqlite-vec store
+│   ├── EmbeddingClient.hpp/cpp   — Gemini embeddings (OpenAI-compat, batched)
+│   ├── Ingestor.hpp/cpp          — curriculum → chunks → embeddings
+│   ├── TextChunker.hpp/cpp       — standalone chunking utility
+│   ├── RetrievalService.hpp/cpp  — vector search helpers
+│   ├── ProgressTracker.hpp/cpp   — per-user learning log
+│   ├── EnglishTutorProcessor.*   — RAG + grammar correction pipeline
+│   └── cli/                      — `english_ingest`, `english_tutor` entries
 ├── actions/
 │   ├── ActionKind.hpp            — enum: None / LocalDevice / TopicSearch / Music / ExternalApi / AssistantSdk
 │   ├── Action.hpp                — {kind, reply, transcript}
@@ -128,26 +144,43 @@ RAII wrapper around `whisper_context`. Loads a GGML model at construction. `tran
 
 ### CommandProcessor
 
-Two-stage routing:
+A thin façade composing two collaborators, seeded from `AiClientConfig`:
 
-1. **Local (synchronous)** — `match_local_()` runs regex matching on the normalized (lowercase, trimmed) transcript:
-   - `turn on|turn off` + `air|switch` → `DeviceAction`
-   - `tell me a story` → `TopicSearchAction`
-   - `open music` → `MusicAction`
+1. **`LocalIntentMatcher`** (`src/ai/LocalIntentMatcher.*`) — regex matching on the
+   normalized (lowercase, trimmed) transcript. Returns a `std::optional<ActionMatch>`
+   so callers can distinguish "no match" from an empty reply:
+   - `turn on|turn off` + `air|switch` → `ActionKind::LocalDevice`
+   - `tell me a story` → `ActionKind::InteractionTopicSearch`
+   - `open music` → `ActionKind::InteractionMusicSearch`
+   - lesson-mode toggles → `ActionKind::LessonModeToggle`
 
-2. **External API (async)** — `call_external_api_()` sends the transcript to an OpenAI-compatible chat endpoint. `build_chat_body_()` assembles the JSON payload (model, system prompt, user message). The actual HTTP POST is delegated to `HttpClient`. Only available when compiled with `HECQUIN_WITH_CURL` and a valid API key is configured. Timeout is 60 seconds.
+2. **`ChatClient`** (`src/ai/ChatClient.*`) — remote LLM call against an
+   OpenAI-compatible `/chat/completions` endpoint. JSON is built with
+   **nlohmann/json**; transport is delegated to an **`IHttpClient`** reference
+   (default `CurlHttpClient`, injectable for tests).
 
-The system prompt is loaded at startup from `.env/prompts/system_prompt.txt` (editable without recompiling) and stored in `AiClientConfig::system_prompt`. If the file is missing, a built-in default is used.
+`CommandProcessor::process()` / `process_async()` try the local matcher first,
+then fall back to `ChatClient::ask()`. The system prompt is loaded at startup
+from `.env/prompts/system_prompt.txt` (editable without recompiling) and stored
+in `AiClientConfig::system_prompt`. If the file is missing, a built-in default
+is used.
 
-`process()` blocks until a result is ready. `process_async()` returns `std::future<Action>`.
+### IHttpClient / HttpClient
 
-### HttpClient
-
-Reusable `http_post_json()` free function. Owns all libcurl boilerplate (global init, handle lifecycle, headers, error handling). Returns `std::optional<HttpResult>` — `nullopt` on transport failure, otherwise the HTTP status code and response body. Guarded by `#ifdef HECQUIN_WITH_CURL`; returns `nullopt` unconditionally when curl is absent.
+`IHttpClient` (`src/ai/IHttpClient.hpp`) is the abstract transport interface
+(`post_json`). `CurlHttpClient` is the default implementation; it forwards to
+the reusable `http_post_json()` free function in `HttpClient.*`, which owns all
+libcurl boilerplate (global init, handle lifecycle, headers, error handling).
+Guarded by `#ifdef HECQUIN_WITH_CURL`; `post_json` returns `std::nullopt`
+unconditionally when curl is absent. Tests provide a lightweight `FakeHttp`
+implementing the same interface — no sockets are opened.
 
 ### OpenAiChatContent
 
-Hand-rolled JSON extractor (no external library). Scans the response string for `"choices"` → `"message"` → `"content"`, then parses the JSON string value including escape sequences (`\n`, `\t`, `\"`, `\\`, `\uXXXX` → UTF-8). Returns `std::nullopt` on parse failure.
+`extract_openai_chat_assistant_content(body)` parses an OpenAI-compatible chat
+completion response using **nlohmann/json** (permissive / ignore-comments mode)
+and returns the first `choices[].message.content` string, or `std::nullopt` on
+any structural / type mismatch. No hand-rolled scanning.
 
 ### ConfigStore / AppConfig / AiClientConfig
 
@@ -293,10 +326,11 @@ Built on the same voice/TTS pipeline, the tutor adds:
 
 ### Mode switching
 
-`VoiceListener` keeps a `ListenerMode { Assistant, Lesson }`. Every cycle it first
-asks `CommandProcessor::match_local` — that returns `LessonModeToggleAction` on
-phrases like `start english lesson` / `exit lesson`, which flips the mode without
-hitting the network. When `mode == Lesson`, transcripts are handed to the
+`VoiceListener` keeps a `ListenerMode { Assistant, Lesson }`. Every cycle it
+runs the transcript through `LocalIntentMatcher::match()` first — that returns
+an `ActionMatch{ ActionKind::LessonModeToggle, … }` on phrases like
+`start english lesson` / `exit lesson`, which flips the mode without hitting
+the network. When `mode == Lesson`, transcripts are handed to the
 `TutorCallback` (a `std::function<Action(const std::string&)>`) instead of the
 external chat API.
 
@@ -306,15 +340,15 @@ external chat API.
 transcript
     │
     ▼
-CommandProcessor.match_local  ← fast regex toggles
+LocalIntentMatcher.match       ← fast regex toggles (lesson on/off, device…)
     │  (no match)
     ▼
 EnglishTutorProcessor.process
     ├── RetrievalService.top_k(transcript, k=3)
     │        └── EmbeddingClient.embed → LearningStore.query_top_k (vec0)
-    ├── build_chat_body_(user + RAG context)
-    ├── http_post_json(chat_completions_url)
-    ├── extract_openai_chat_assistant_content
+    ├── build_chat_body(user + RAG context)       [nlohmann/json]
+    ├── IHttpClient.post_json(chat_completions_url)
+    ├── extract_openai_chat_assistant_content     [nlohmann/json]
     ├── parse_tutor_reply → GrammarCorrectionAction
     └── ProgressTracker.log_interaction → interactions + vocab_progress
     │

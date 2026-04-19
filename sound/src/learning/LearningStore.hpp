@@ -79,9 +79,15 @@ public:
     const std::string& db_path() const { return db_path_; }
     int embedding_dim() const { return embedding_dim_; }
 
+    /** Current schema version this build writes. Bump whenever DDL changes. */
+    static constexpr int kSchemaVersion = 1;
+
 private:
     bool run_migrations_();
     bool exec_(const char* sql);
+    bool check_embedding_dim_();
+    bool set_meta_(const char* key, const std::string& value);
+    std::optional<std::string> get_meta_(const char* key) const;
 
     std::string db_path_;
     int embedding_dim_;

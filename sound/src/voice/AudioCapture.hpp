@@ -1,17 +1,12 @@
 #pragma once
 
+#include "voice/AudioCaptureConfig.hpp"
+
 #include <SDL.h>
 
 #include <atomic>
 #include <mutex>
 #include <vector>
-
-struct AudioCaptureConfig {
-    int sample_rate = 16000;
-    int channels = 1;
-    int sdl_buffer_samples = 1024;
-    int device_index = -1; // -1 = system default
-};
 
 /**
  * SDL capture at float32 mono (Whisper-friendly). Callback and main thread share the buffer

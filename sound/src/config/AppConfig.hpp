@@ -2,7 +2,7 @@
 
 #include "config/ai/AiClientConfig.hpp"
 #include "config/ConfigStore.hpp"
-#include "voice/AudioCapture.hpp"
+#include "voice/AudioCaptureConfig.hpp"
 
 #include <string>
 

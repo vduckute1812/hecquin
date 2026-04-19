@@ -1,33 +1,46 @@
 #pragma once
 
 #include "actions/Action.hpp"
+#include "ai/ChatClient.hpp"
+#include "ai/IHttpClient.hpp"
+#include "ai/LocalIntentMatcher.hpp"
 #include "config/ai/AiClientConfig.hpp"
 
 #include <future>
+#include <memory>
 #include <optional>
 #include <string>
 
 /**
- * Routes speech transcripts to local commands, interaction modes, or an HTTP chat API.
+ * High-level router: tries the fast regex matcher first, falls back to the
+ * HTTP chat client.  Composes `LocalIntentMatcher` + `ChatClient` so each is
+ * independently testable.
+ *
+ * The default constructor builds its own `CurlHttpClient`; tests (or
+ * alternative transports) can inject an `IHttpClient&` instead.
  */
 class CommandProcessor {
 public:
     explicit CommandProcessor(AiClientConfig config = AiClientConfig::from_default_config());
 
-    /** Full pipeline: fast local regex; external API runs on a worker thread (caller waits on result). */
+    /** Inject a specific HTTP client (e.g. a fake in tests). */
+    CommandProcessor(AiClientConfig config, hecquin::ai::IHttpClient& http);
+
+    /** Full pipeline: fast local regex, then external chat API. */
     Action process(const std::string& transcript);
 
-    /** Same as process but caller can poll/wait without blocking until .wait() / .get(). */
+    /** Run `process` on a worker thread. Caller must outlive the returned future. */
     std::future<Action> process_async(const std::string& transcript);
 
-    /** Runs the fast local regex layer only; returns nullopt when no command matched. */
+    /** Run only the local regex layer. Returns nullopt on no match. */
     std::optional<Action> match_local(const std::string& transcript) const;
 
     const AiClientConfig& config() const { return config_; }
 
 private:
-    AiClientConfig config_;
-    std::optional<Action> match_local_(const std::string& normalized) const;
-    std::string build_chat_body_(const std::string& user_text) const;
-    Action call_external_api_(const std::string& user_text) const;
+    AiClientConfig                               config_;
+    hecquin::ai::LocalIntentMatcher              matcher_;
+    std::unique_ptr<hecquin::ai::CurlHttpClient> owned_http_;
+    hecquin::ai::IHttpClient&                    http_;
+    hecquin::ai::ChatClient                      chat_;
 };

@@ -102,7 +102,7 @@ cmd_piper_install() {
     binary_info "$PIPER_DIR/piper"
     if ! run_piper "$PIPER_DIR/piper" --help >/dev/null 2>&1; then
       echo "❌ Native Piper install completed but runtime verification failed"
-      echo "Ensure Homebrew dependencies exist: brew install cmake git sdl2 espeak-ng"
+      echo "Ensure Homebrew dependencies exist: brew install cmake git sdl2 espeak-ng sqlite"
       exit 1
     fi
 

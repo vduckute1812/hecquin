@@ -3,50 +3,21 @@
 #include "actions/GrammarCorrectionAction.hpp"
 #include "ai/HttpClient.hpp"
 #include "ai/OpenAiChatContent.hpp"
+#include "common/StringUtils.hpp"
 #include "learning/EmbeddingClient.hpp"
 #include "learning/LearningStore.hpp"
 #include "learning/ProgressTracker.hpp"
 #include "learning/RetrievalService.hpp"
 
-#include <algorithm>
-#include <cctype>
-#include <iomanip>
+#include <nlohmann/json.hpp>
+
 #include <regex>
-#include <sstream>
 
 namespace hecquin::learning {
 
+using hecquin::common::trim_copy;
+
 namespace {
-
-std::string trim_copy(std::string s) {
-    auto not_space = [](unsigned char c) { return !std::isspace(c); };
-    s.erase(s.begin(), std::find_if(s.begin(), s.end(), not_space));
-    s.erase(std::find_if(s.rbegin(), s.rend(), not_space).base(), s.end());
-    return s;
-}
-
-std::string json_escape(const std::string& s) {
-    std::string out;
-    out.reserve(s.size() + 8);
-    for (unsigned char c : s) {
-        switch (c) {
-            case '\\': out += "\\\\"; break;
-            case '"':  out += "\\\""; break;
-            case '\n': out += "\\n"; break;
-            case '\r': out += "\\r"; break;
-            case '\t': out += "\\t"; break;
-            default:
-                if (c < 0x20) {
-                    std::ostringstream oss;
-                    oss << "\\u" << std::hex << std::setw(4) << std::setfill('0') << static_cast<int>(c);
-                    out += oss.str();
-                } else {
-                    out += static_cast<char>(c);
-                }
-        }
-    }
-    return out;
-}
 
 // Parse "You said: ... / Better: ... / Reason: ..." (or any casing / punctuation variant).
 GrammarCorrectionAction parse_tutor_reply(const std::string& raw, const std::string& fallback_original) {
@@ -95,13 +66,14 @@ std::string EnglishTutorProcessor::build_chat_body_(const std::string& user_text
     if (!context.empty()) {
         system += "\n\nReference snippets (use only if relevant):\n" + context;
     }
-    std::ostringstream oss;
-    oss << "{\"model\":\"" << json_escape(ai_.model) << "\","
-        << "\"messages\":["
-        << "{\"role\":\"system\",\"content\":\"" << json_escape(system) << "\"},"
-        << "{\"role\":\"user\",\"content\":\"" << json_escape(user_text) << "\"}"
-        << "]}";
-    return oss.str();
+    const nlohmann::json body = {
+        {"model", ai_.model},
+        {"messages", nlohmann::json::array({
+            {{"role", "system"}, {"content", system}},
+            {{"role", "user"},   {"content", user_text}},
+        })},
+    };
+    return body.dump();
 }
 
 Action EnglishTutorProcessor::call_llm_(const std::string& user_text) {

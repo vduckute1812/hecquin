@@ -54,6 +54,7 @@ Usage:
   ./dev.sh piper:download-model [voice]
   ./dev.sh build
   ./dev.sh run <target> [args...]
+  ./dev.sh transcribe <wav-file>        Transcribe a WAV via whisper.cpp
   ./dev.sh speak "text to speak"
   ./dev.sh curriculum:fetch [--force]   Download public English-learning datasets
   ./dev.sh learning:ingest [args...]    Embed curriculum/custom/ into the vector DB

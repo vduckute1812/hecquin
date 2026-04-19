@@ -7,11 +7,11 @@ jobs_count() {
 cmd_deps() {
   echo "Installing dependencies..."
   if [[ "$(uname)" == "Darwin" ]]; then
-    brew install cmake git sdl2 espeak-ng
+    brew install cmake git sdl2 espeak-ng sqlite
   else
     sudo apt update
     sudo apt install -y build-essential cmake pkg-config git libsdl2-dev libcurl4-openssl-dev \
-      espeak-ng libespeak-ng-dev
+      espeak-ng libespeak-ng-dev libsqlite3-dev
   fi
 }
 

@@ -23,6 +23,14 @@ struct IngestorConfig {
     int chunk_chars = 1800;       // ~400 tokens of English text
     int chunk_overlap_chars = 200;
     bool force_rebuild = false;
+
+    /**
+     * How many chunks to pack into a single `/embeddings` request.  Gemini's
+     * OpenAI-compat endpoint caps array length around 100; 16 is a safe
+     * default that still yields ~10× speed-up over single-item requests.
+     * Set to 1 to disable batching (useful when debugging a specific chunk).
+     */
+    int embed_batch_size = 16;
 };
 
 /**
