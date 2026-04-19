@@ -56,7 +56,8 @@ std::string VoiceListener::sanitizeForTts(std::string s) {
 }
 
 void VoiceListener::speakReply(const Action& action) {
-    std::cout << "🤖 Route: " << actionKindLabel(action.kind) << std::endl;
+    std::cout << "🤖 Route: " << actionKindLabel(action.kind)
+              << "  mode=" << (mode_ == ListenerMode::Lesson ? "lesson" : "assistant") << std::endl;
     if (action.reply.empty()) {
         return;
     }
@@ -70,6 +71,28 @@ void VoiceListener::speakReply(const Action& action) {
 
     capture_.clearBuffer();
     capture_.resumeDevice();
+}
+
+Action VoiceListener::routeTranscript_(const std::string& transcript) {
+    // Always give the fast local matcher a chance first — this is what lets the user
+    // switch modes by voice ("start english lesson" / "exit lesson") from either side.
+    if (auto local = commands_.match_local(transcript)) {
+        if (local->kind == ActionKind::LessonModeToggle) {
+            static const std::regex re_start(
+                R"(\b(start|begin|open)\s+(english\s+)?lesson\b)",
+                std::regex_constants::ECMAScript | std::regex_constants::icase);
+            mode_ = std::regex_search(transcript, re_start)
+                        ? ListenerMode::Lesson
+                        : ListenerMode::Assistant;
+        }
+        return *local;
+    }
+
+    if (mode_ == ListenerMode::Lesson && tutor_cb_) {
+        return tutor_cb_(transcript);
+    }
+    // Fall back to the external API (handled by the full `process` pipeline).
+    return commands_.process(transcript);
 }
 
 void VoiceListener::run() {
@@ -108,7 +131,8 @@ void VoiceListener::run() {
 
                 const std::string transcript = whisper_.transcribe(live);
                 if (!transcript.empty()) {
-                    std::future<Action> fut = commands_.process_async(transcript);
+                    std::future<Action> fut = std::async(std::launch::async,
+                        [this, transcript]() { return routeTranscript_(transcript); });
                     speakReply(fut.get());
                     std::cout << std::endl;
                 }

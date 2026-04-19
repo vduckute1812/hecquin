@@ -389,6 +389,116 @@ Download with: `./dev.sh piper:download-model <voice>`
 ./dev.sh env:clean rpi      # Clean Raspberry Pi build
 ```
 
+## English Tutor Mode
+
+In addition to the default assistant, the sound module ships with an **English tutor**
+that corrects grammar in what you say, backed by a local SQLite + `sqlite-vec` vector
+database and Gemini embeddings for RAG.
+
+### Subsystem layout
+
+```
+sound/
+├── .env/shared/learning/
+│   ├── curriculum/         # public datasets (auto-fetched)
+│   │   ├── vocabulary/     # Oxford 3000/5000, NGSL, CEFR-J
+│   │   ├── grammar/        # Wikibooks "English in Use"
+│   │   ├── dictionary/     # WordNet-like glosses (JSONL)
+│   │   └── readers/        # Gutenberg graded readers
+│   ├── custom/             # drop your own PDF/MD/TXT here
+│   └── db/learning.sqlite  # vector + progress DB (git-ignored)
+└── src/learning/
+    ├── LearningStore.{hpp,cpp}          # SQLite + sqlite-vec migrations
+    ├── EmbeddingClient.{hpp,cpp}        # Gemini gemini-embedding-001 over HTTP
+    ├── Ingestor.{hpp,cpp}               # chunk/hash/upsert pipeline
+    ├── RetrievalService.{hpp,cpp}       # top-k cosine search
+    ├── ProgressTracker.{hpp,cpp}        # sessions / interactions / vocab
+    ├── EnglishTutorProcessor.{hpp,cpp}  # RAG → Gemini chat → GrammarCorrection
+    └── cli/{EnglishIngest,EnglishTutorMain}.cpp
+```
+
+### SQLite schema
+
+| Table             | Purpose                                                     |
+| ----------------- | ----------------------------------------------------------- |
+| `documents`       | Ingested text chunks (source, kind, title, body, metadata)  |
+| `vec_documents`   | `vec0` virtual table holding the 768-dim embedding          |
+| `ingested_files`  | `path → content_fingerprint` for skip-unchanged ingest      |
+| `sessions`        | One row per tutor run (mode, start/end)                     |
+| `interactions`    | Every utterance + tutor correction + short explanation      |
+| `vocab_progress`  | Per-word first/last seen timestamps + mastery counter       |
+
+### Workflow
+
+```bash
+# 1. Download public curriculum into .env/shared/learning/curriculum/
+./dev.sh curriculum:fetch
+
+# 2. (Optional) drop extra PDFs/markdown into .env/shared/learning/custom/
+cp ~/Downloads/my_grammar_notes.md sound/.env/shared/learning/custom/
+
+# 3. Build — this produces `english_ingest` and `english_tutor` alongside voice_detector
+./dev.sh build
+
+# 4. Embed everything into SQLite (uses GEMINI_API_KEY for embeddings)
+./dev.sh learning:ingest
+# Re-embed everything from scratch:
+./dev.sh learning:ingest --rebuild
+
+# 5. Launch the tutor
+./dev.sh english:tutor
+# Or from the default assistant, just say: "start english lesson"
+# To leave: "exit lesson"
+```
+
+### Runtime flow
+
+```
+voice → Whisper → CommandProcessor.match_local (toggle?)
+                        │
+                        ├── yes → flip mode / normal command
+                        └── no → in lesson mode?
+                                   │
+                                   ├── yes → RetrievalService.top_k (sqlite-vec)
+                                   │         → build system prompt + context
+                                   │         → Gemini /chat/completions
+                                   │         → parse "You said / Better / Reason"
+                                   │         → ProgressTracker.log_interaction
+                                   │
+                                   └── no → CommandProcessor external API
+```
+
+### Grammar correction reply shape
+
+The tutor prompt (`.env/prompts/english_tutor_prompt.txt`) asks Gemini for exactly three short
+lines, which `EnglishTutorProcessor::parse_tutor_reply` slices into a `GrammarCorrectionAction`:
+
+```
+You said: I goed to the store yesterday.
+Better: I went to the store yesterday.
+Reason: The past tense of "go" is the irregular form "went".
+```
+
+### Configuration knobs (`.env/config.env`)
+
+| Key                              | Default                                              | Meaning                                  |
+| -------------------------------- | ---------------------------------------------------- | ---------------------------------------- |
+| `HECQUIN_AI_EMBEDDING_MODEL`     | `gemini-embedding-001`                               | Embedding model slug (OpenAI-compatible). `text-embedding-004` is no longer available on Gemini's OpenAI-compat endpoint. |
+| `HECQUIN_AI_EMBEDDING_DIM`       | `768`                                                | Vector width (must match vec0 schema)    |
+| `HECQUIN_LEARNING_DB_PATH`       | `.env/shared/learning/db/learning.sqlite`            | Location of the SQLite DB                |
+| `HECQUIN_LEARNING_CURRICULUM_DIR`| `.env/shared/learning/curriculum`                    | Where `fetch_curriculum.sh` writes data  |
+| `HECQUIN_LEARNING_CUSTOM_DIR`    | `.env/shared/learning/custom`                        | Drop custom text/md/pdf here             |
+| `HECQUIN_LEARNING_RAG_TOPK`      | `3`                                                  | Chunks pulled into the tutor prompt      |
+| `HECQUIN_LESSON_START_PHRASES`   | `start english lesson\|begin lesson\|start lesson`   | Voice triggers to enter lesson mode      |
+| `HECQUIN_LESSON_END_PHRASES`     | `exit lesson\|end lesson\|stop lesson`               | Voice triggers to leave lesson mode      |
+
+### Dependencies (extra for the tutor)
+
+- **SQLite3** development package (`brew install sqlite` on macOS, `apt install libsqlite3-dev` on Debian/Ubuntu).
+- **sqlite-vec** — downloaded automatically as an amalgamation into `third_party/sqlite-vec/` on first `cmake` configure. Override with `-DHECQUIN_DISABLE_SQLITE_VEC=ON` to fall back to in-process brute-force cosine search over a BLOB column.
+- **libcurl** (same as the base bot) — required for the embeddings HTTP call.
+
+
 ## CMake Configuration
 
 ### Prerequisites

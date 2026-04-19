@@ -28,6 +28,7 @@ AiClientConfig AiClientConfig::from_store(const ConfigStore& store) {
         base.pop_back();
     }
     c.chat_completions_url = base + "/chat/completions";
+    c.embeddings_url = base + "/embeddings";
 
     std::string model = store.resolve("HECQUIN_AI_MODEL");
     if (model.empty()) {
@@ -35,6 +36,22 @@ AiClientConfig AiClientConfig::from_store(const ConfigStore& store) {
     }
     if (!model.empty()) {
         c.model = std::move(model);
+    }
+
+    std::string embedding_model = store.resolve("HECQUIN_AI_EMBEDDING_MODEL");
+    if (embedding_model.empty()) {
+        embedding_model = store.resolve("OPENAI_EMBEDDING_MODEL");
+    }
+    if (!embedding_model.empty()) {
+        c.embedding_model = std::move(embedding_model);
+    }
+
+    const std::string dim = store.resolve("HECQUIN_AI_EMBEDDING_DIM");
+    if (!dim.empty()) {
+        try {
+            c.embedding_dim = std::stoi(dim);
+        } catch (...) {
+        }
     }
     return c;
 }

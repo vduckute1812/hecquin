@@ -55,6 +55,9 @@ Usage:
   ./dev.sh build
   ./dev.sh run <target> [args...]
   ./dev.sh speak "text to speak"
+  ./dev.sh curriculum:fetch [--force]   Download public English-learning datasets
+  ./dev.sh learning:ingest [args...]    Embed curriculum/custom/ into the vector DB
+  ./dev.sh english:tutor                Launch the English-tutor voice loop
   ./dev.sh env:info              Show current environment info
   ./dev.sh env:clean [platform]  Clean build artifacts
 
@@ -104,6 +107,9 @@ case "$cmd" in
   run) cmd_run "$@" ;;
   transcribe) cmd_transcribe "$@" ;;
   speak) cmd_speak "$@" ;;
+  curriculum:fetch) cmd_curriculum_fetch "$arg" ;;
+  learning:ingest) cmd_learning_ingest "$@" ;;
+  english:tutor) cmd_english_tutor ;;
   env:info) cmd_env_info ;;
   env:clean) cmd_env_clean "$arg" ;;
 

@@ -8,4 +8,6 @@ enum class ActionKind {
     InteractionMusicSearch,
     ExternalApi,
     AssistantSdk,
+    EnglishLesson,
+    LessonModeToggle,
 };

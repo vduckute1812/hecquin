@@ -17,4 +17,6 @@ if (HECQUIN_SOUND_BUILD_TESTS)
     target_include_directories(hecquin_sound_test_openai_chat PRIVATE ${HECQUIN_SOUND_SRC_ROOT})
 
     add_test(NAME hecquin_sound_openai_chat_content COMMAND hecquin_sound_test_openai_chat)
+
+    hecquin_adhoc_codesign(hecquin_sound_test_openai_chat)
 endif ()

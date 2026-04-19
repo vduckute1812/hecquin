@@ -273,5 +273,86 @@ Whisper/Piper models are shared across platforms in `.env/shared/models/`.
 ./dev.sh run voice_detector
 ./dev.sh run text_to_speech "hello world"
 ./dev.sh speak "hello"     # shorthand for TTS playback
+./dev.sh curriculum:fetch  # download public English-learning datasets
+./dev.sh learning:ingest   # chunk → embed → insert into SQLite vector DB
+./dev.sh english:tutor     # launch lesson-mode voice loop
 ./dev.sh env:clean         # wipe platform build outputs
 ```
+
+---
+
+## English Tutor Subsystem
+
+Built on the same voice/TTS pipeline, the tutor adds:
+
+- A local **SQLite + sqlite-vec** vector DB for curriculum and progress.
+- A **Gemini embeddings** client (`gemini-embedding-001`, with a `dimensions` override so the on-disk vec0 schema stays at 768) reusing `HttpClient`.
+- A second command processor (`EnglishTutorProcessor`) that does RAG → chat → correction.
+- A second executable `english_tutor` that forces the listener into `Lesson` mode.
+- A third executable `english_ingest` (no SDL2/Whisper) for offline curriculum ingestion.
+
+### Mode switching
+
+`VoiceListener` keeps a `ListenerMode { Assistant, Lesson }`. Every cycle it first
+asks `CommandProcessor::match_local` — that returns `LessonModeToggleAction` on
+phrases like `start english lesson` / `exit lesson`, which flips the mode without
+hitting the network. When `mode == Lesson`, transcripts are handed to the
+`TutorCallback` (a `std::function<Action(const std::string&)>`) instead of the
+external chat API.
+
+### Data flow (Lesson mode)
+
+```
+transcript
+    │
+    ▼
+CommandProcessor.match_local  ← fast regex toggles
+    │  (no match)
+    ▼
+EnglishTutorProcessor.process
+    ├── RetrievalService.top_k(transcript, k=3)
+    │        └── EmbeddingClient.embed → LearningStore.query_top_k (vec0)
+    ├── build_chat_body_(user + RAG context)
+    ├── http_post_json(chat_completions_url)
+    ├── extract_openai_chat_assistant_content
+    ├── parse_tutor_reply → GrammarCorrectionAction
+    └── ProgressTracker.log_interaction → interactions + vocab_progress
+    │
+    ▼
+GrammarCorrectionAction.to_reply() → TTS
+```
+
+### SQLite schema (learning DB)
+
+| Table             | Notes                                                   |
+|-------------------|---------------------------------------------------------|
+| `documents`       | `id, source, kind, title, body, metadata_json, created_at` |
+| `vec_documents`   | `USING vec0(embedding FLOAT[768])` (or BLOB fallback)   |
+| `ingested_files`  | `path PRIMARY KEY, hash, ingested_at` — skip unchanged  |
+| `sessions`        | `id, mode, started_at, ended_at`                        |
+| `interactions`    | `id, session_id, user_text, corrected_text, grammar_notes, created_at` |
+| `vocab_progress`  | `word PRIMARY KEY, first_seen_at, last_seen_at, seen_count, mastery` |
+
+If `sqlite-vec` cannot be downloaded at configure time, `LearningStore` transparently
+falls back to a BLOB-backed table and a C++ brute-force cosine scan — the rest of the
+pipeline works unchanged (just slower on large curricula).
+
+### Ingest pipeline
+
+`scripts/fetch_curriculum.sh` pulls public datasets into
+`.env/shared/learning/curriculum/{vocabulary,grammar,dictionary,readers}/`. The
+`english_ingest` binary then:
+
+1. Lists every text file under `curriculum/` and `custom/`.
+2. Computes an FNV-1a-based content fingerprint and skips already-ingested files
+   (stored in `ingested_files`), unless `--rebuild` is passed.
+3. Splits each file into ~1800-character chunks with a 200-character overlap,
+   preferring whitespace breaks.
+4. Embeds each chunk via `EmbeddingClient::embed`.
+5. Upserts `documents` + `vec_documents` and records the file hash.
+
+### Configuration additions
+
+`AiClientConfig` grows `embeddings_url`, `embedding_model`, `embedding_dim`, and
+`tutor_system_prompt`. `AppConfig` gains a `LearningConfig` block that reads the
+`HECQUIN_LEARNING_*` env variables (see README for the full table).

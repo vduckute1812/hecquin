@@ -73,3 +73,31 @@ cmd_env_clean() {
   echo "✅ Cleaned: build/$target and .env/$target"
 }
 
+cmd_curriculum_fetch() {
+  local force_flag="${1:-}"
+  echo "📚 Fetching curriculum datasets..."
+  bash "$ROOT_DIR/scripts/fetch_curriculum.sh" ${force_flag}
+}
+
+cmd_learning_ingest() {
+  local ingest_bin="$PROJECT_BUILD_DIR/english_ingest"
+  if [[ ! -x "$ingest_bin" ]]; then
+    echo "Binary not found: $ingest_bin"
+    echo "Run: ./dev.sh build"
+    exit 1
+  fi
+  shift || true
+  echo "🧠 Ingesting curriculum into vector DB..."
+  (cd "$ROOT_DIR" && "$ingest_bin" "$@")
+}
+
+cmd_english_tutor() {
+  local bin="$PROJECT_BUILD_DIR/english_tutor"
+  if [[ ! -x "$bin" ]]; then
+    echo "Binary not found: $bin"
+    echo "Run: ./dev.sh build"
+    exit 1
+  fi
+  (cd "$PROJECT_BUILD_DIR" && LD_LIBRARY_PATH="${WHISPER_INSTALL_DIR}/lib:${LD_LIBRARY_PATH:-}" ./english_tutor)
+}
+

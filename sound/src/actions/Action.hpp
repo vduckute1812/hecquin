@@ -27,5 +27,10 @@ struct Action {
             return "ExternalApi";
         case ActionKind::AssistantSdk:
             return "AssistantSdk";
+        case ActionKind::EnglishLesson:
+            return "EnglishLesson";
+        case ActionKind::LessonModeToggle:
+            return "LessonModeToggle";
     }
+    return "Unknown";
 }

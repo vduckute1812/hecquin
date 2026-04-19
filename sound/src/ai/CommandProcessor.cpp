@@ -1,8 +1,9 @@
 #include "ai/CommandProcessor.hpp"
-#include "actions/NoneAction.hpp"
 #include "actions/DeviceAction.hpp"
 #include "actions/ExternalApiAction.hpp"
+#include "actions/GrammarCorrectionAction.hpp"
 #include "actions/MusicAction.hpp"
+#include "actions/NoneAction.hpp"
 #include "actions/TopicSearchAction.hpp"
 #include "ai/HttpClient.hpp"
 #include "ai/OpenAiChatContent.hpp"
@@ -68,6 +69,28 @@ std::optional<Action> CommandProcessor::match_local_(const std::string& n) const
     static const std::regex re_music(
         R"(\bopen music\b)",
         std::regex_constants::ECMAScript | std::regex_constants::icase);
+
+    static const std::regex re_lesson_start(
+        R"(\b(start|begin|open)\s+(english\s+)?lesson\b)",
+        std::regex_constants::ECMAScript | std::regex_constants::icase);
+
+    static const std::regex re_lesson_end(
+        R"(\b(exit|end|stop|quit)\s+(english\s+)?lesson\b)",
+        std::regex_constants::ECMAScript | std::regex_constants::icase);
+
+    if (std::regex_search(n, re_lesson_start)) {
+        LessonModeToggleAction a;
+        a.enable = true;
+        a.reply = "English lesson mode on. Say a sentence and I will help.";
+        return a.into_action(n);
+    }
+
+    if (std::regex_search(n, re_lesson_end)) {
+        LessonModeToggleAction a;
+        a.enable = false;
+        a.reply = "Lesson mode off.";
+        return a.into_action(n);
+    }
 
     std::smatch m;
     if (std::regex_search(n, m, re_device)) {
@@ -141,4 +164,13 @@ Action CommandProcessor::process(const std::string& transcript) {
 
 std::future<Action> CommandProcessor::process_async(const std::string& transcript) {
     return std::async(std::launch::async, [this, transcript]() { return process(transcript); });
+}
+
+std::optional<Action> CommandProcessor::match_local(const std::string& transcript) const {
+    const std::string trimmed = trim_copy(transcript);
+    const std::string normalized = to_lower_copy(trimmed);
+    if (normalized.empty()) return std::nullopt;
+    auto action = match_local_(normalized);
+    if (action) action->transcript = trimmed;
+    return action;
 }

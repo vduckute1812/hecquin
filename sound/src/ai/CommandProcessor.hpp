@@ -20,6 +20,9 @@ public:
     /** Same as process but caller can poll/wait without blocking until .wait() / .get(). */
     std::future<Action> process_async(const std::string& transcript);
 
+    /** Runs the fast local regex layer only; returns nullopt when no command matched. */
+    std::optional<Action> match_local(const std::string& transcript) const;
+
     const AiClientConfig& config() const { return config_; }
 
 private:
