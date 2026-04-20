@@ -23,7 +23,7 @@ void print_usage(const char* prog) {
         << "  --curriculum <dir>     Override curriculum root (default from config.env).\n"
         << "  --custom <dir>         Override custom corpus root.\n"
         << "  --chunk-chars N        Target chunk size in characters (default 1800).\n"
-        << "  --batch-size N         Embeddings packed per HTTP request (default 16).\n"
+        << "  --batch-size N         Embeddings packed per HTTP request (default 16; 1 disables array batching).\n"
         << "  -h, --help             Show this help.\n";
 }
 

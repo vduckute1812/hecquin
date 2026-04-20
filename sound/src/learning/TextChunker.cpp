@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <string_view>
 
 namespace hecquin::learning {
 
@@ -32,6 +33,56 @@ std::vector<std::string> chunk_text(const std::string& text, int chunk_chars, in
         if (b > a) out.emplace_back(piece.substr(a, b - a));
         if (end >= text.size()) break;
     }
+    return out;
+}
+
+std::vector<std::string> chunk_lines(const std::string& text, int budget_chars) {
+    std::vector<std::string> out;
+    if (text.empty()) return out;
+    if (budget_chars <= 0) budget_chars = 1800;
+    const size_t budget = static_cast<size_t>(budget_chars);
+
+    std::string buffer;
+    buffer.reserve(budget);
+
+    auto flush = [&]() {
+        if (!buffer.empty()) {
+            out.emplace_back(std::move(buffer));
+            buffer.clear();
+        }
+    };
+
+    size_t i = 0;
+    while (i < text.size()) {
+        const size_t nl = text.find('\n', i);
+        const size_t end = (nl == std::string::npos) ? text.size() : nl;
+        size_t line_end = end;
+        if (line_end > i && text[line_end - 1] == '\r') --line_end;
+
+        // Skip blank (empty-after-trim) lines.
+        if (line_end > i) {
+            const std::string_view line(text.data() + i, line_end - i);
+
+            // If the line alone exceeds budget, flush current buffer and emit
+            // the oversize line as its own chunk (we never split a record).
+            if (line.size() > budget) {
+                flush();
+                out.emplace_back(line);
+            } else if (buffer.empty()) {
+                buffer.assign(line);
+            } else if (buffer.size() + 1 + line.size() <= budget) {
+                buffer.push_back('\n');
+                buffer.append(line);
+            } else {
+                flush();
+                buffer.assign(line);
+            }
+        }
+
+        if (nl == std::string::npos) break;
+        i = nl + 1;
+    }
+    flush();
     return out;
 }
 

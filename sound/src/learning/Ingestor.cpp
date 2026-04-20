@@ -197,7 +197,10 @@ void Ingestor::ingest_file_(const std::string& path, const std::string& kind,
     }
 
     const std::string title = fs::path(path).filename().string();
-    const auto chunks = chunk_text(content, cfg_.chunk_chars, cfg_.chunk_overlap_chars);
+    const std::string ext = file_extension_lower(fs::path(path));
+    const auto chunks = (ext == "jsonl" || ext == "json")
+        ? chunk_lines(content, cfg_.chunk_chars)
+        : chunk_text(content, cfg_.chunk_chars, cfg_.chunk_overlap_chars);
     if (chunks.empty()) {
         ++report.files_skipped;
         std::cerr << prefix << "skip (no chunks): " << path << std::endl;

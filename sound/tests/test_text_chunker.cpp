@@ -14,6 +14,7 @@ int fail(const char* message) {
 
 int main() {
     using hecquin::learning::chunk_text;
+    using hecquin::learning::chunk_lines;
 
     {
         const auto c = chunk_text("", 100, 10);
@@ -58,6 +59,66 @@ int main() {
         // Overlap >= chunk_chars should be clamped.  Should still terminate.
         const auto c = chunk_text("abcdefghij", 4, 9999);
         if (c.empty()) return fail("pathological overlap must still terminate");
+    }
+    // ---- chunk_lines ---------------------------------------------------------
+    {
+        const auto c = chunk_lines("", 100);
+        if (!c.empty()) return fail("chunk_lines empty input");
+    }
+    {
+        // Three short JSONL records well under budget should pack into one chunk.
+        const std::string a = R"({"word":"autumnal","meanings":["of autumn"]})";
+        const std::string b = R"({"word":"amazing","meanings":["inspiring awe"]})";
+        const std::string d = R"({"word":"awesome","meanings":["inspiring awe"]})";
+        const std::string text = a + "\n" + b + "\n" + d + "\n";
+        const auto c = chunk_lines(text, 500);
+        if (c.size() != 1) return fail("chunk_lines packs three short lines into one chunk");
+        if (c[0] != a + "\n" + b + "\n" + d) {
+            return fail("chunk_lines preserves line order and joins with newline");
+        }
+    }
+    {
+        // Every line in every chunk must be a full JSONL record (start with '{'
+        // and end with '}') — i.e. no line was ever split.
+        std::string text;
+        for (int i = 0; i < 40; ++i) {
+            text += R"({"word":"w)" + std::to_string(i) + R"(","meanings":["m)" +
+                    std::to_string(i) + R"("]})" + "\n";
+        }
+        const auto c = chunk_lines(text, 120);
+        if (c.empty()) return fail("chunk_lines produced no chunks for JSONL corpus");
+        for (const auto& piece : c) {
+            size_t start = 0;
+            while (start <= piece.size()) {
+                const size_t nl = piece.find('\n', start);
+                const size_t stop = (nl == std::string::npos) ? piece.size() : nl;
+                if (stop == start) break;
+                if (piece[start] != '{' || piece[stop - 1] != '}') {
+                    return fail("chunk_lines: line in chunk is not a full {...} record");
+                }
+                if (nl == std::string::npos) break;
+                start = nl + 1;
+            }
+        }
+    }
+    {
+        // A single line longer than the budget becomes its own oversize chunk;
+        // it is not truncated.
+        const std::string huge(500, 'x');
+        const auto c = chunk_lines(huge + "\n" + "small", 100);
+        if (c.size() != 2) return fail("chunk_lines oversize line emits its own chunk");
+        if (c[0].size() != 500) return fail("chunk_lines oversize line must not be truncated");
+        if (c[1] != "small") return fail("chunk_lines continues after oversize line");
+    }
+    {
+        // CRLF input: trailing '\r' is stripped from each line.
+        const auto c = chunk_lines("alpha\r\nbeta\r\n", 100);
+        if (c.size() != 1 || c[0] != "alpha\nbeta") return fail("chunk_lines CRLF handling");
+    }
+    {
+        // Blank lines are dropped, not treated as content.
+        const auto c = chunk_lines("one\n\n\ntwo\n", 100);
+        if (c.size() != 1 || c[0] != "one\ntwo") return fail("chunk_lines drops blank lines");
     }
     return 0;
 }

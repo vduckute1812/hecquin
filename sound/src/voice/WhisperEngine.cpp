@@ -64,11 +64,9 @@ std::string WhisperEngine::transcribe(const std::vector<float>& samples) {
 
     static constexpr std::array kNoiseTokens = {
         "[BLANK_AUDIO]",
-        "(blank_audio)",
         "[NO_SPEECH]",
-        "(no speech)",
-        "[ Inaudible Remark ]",
         "[inaudible]",
+        "[silence]",
     };
     for (const char* tok : kNoiseTokens) {
         if (joined.find(tok) != std::string::npos) {
