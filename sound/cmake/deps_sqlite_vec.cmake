@@ -115,6 +115,9 @@ endif ()
 target_link_libraries(hecquin_deps_sqlite_vec INTERFACE hecquin_sqlite_vec_obj)
 target_include_directories(hecquin_deps_sqlite_vec INTERFACE "${SQLITE_VEC_DIR}")
 target_compile_definitions(hecquin_deps_sqlite_vec INTERFACE HECQUIN_WITH_SQLITE_VEC=1)
+# Ensure any TU that includes `sqlite-vec.h` sees the "core" variant (sqlite3.h),
+# otherwise sqlite3ext.h will remap sqlite3_* calls through sqlite3_api.
+target_compile_definitions(hecquin_deps_sqlite_vec INTERFACE SQLITE_CORE=1)
 
 set(HECQUIN_HAS_SQLITE_VEC ON CACHE INTERNAL "")
 message(STATUS "sqlite-vec enabled (${SQLITE_VEC_VERSION}) — vector search available.")
