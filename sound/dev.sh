@@ -59,6 +59,8 @@ Usage:
   ./dev.sh curriculum:fetch [--force]   Download public English-learning datasets
   ./dev.sh learning:ingest [args...]    Embed curriculum/custom/ into the vector DB
   ./dev.sh english:tutor                Launch the English-tutor voice loop
+  ./dev.sh pronunciation:install [--force]  Download wav2vec2-phoneme model + onnxruntime
+  ./dev.sh pronunciation:drill [args...]    Run the prompted pronunciation / intonation drill
   ./dev.sh env:info              Show current environment info
   ./dev.sh env:clean [platform]  Clean build artifacts
 
@@ -92,6 +94,7 @@ EOF
 source "$ROOT_DIR/scripts/dev_project.sh"
 source "$ROOT_DIR/scripts/dev_whisper.sh"
 source "$ROOT_DIR/scripts/dev_piper.sh"
+source "$ROOT_DIR/scripts/dev_pronunciation.sh"
 
 cmd="${1:-}"
 arg="${2:-}"
@@ -111,6 +114,8 @@ case "$cmd" in
   curriculum:fetch) cmd_curriculum_fetch "$arg" ;;
   learning:ingest) cmd_learning_ingest "$@" ;;
   english:tutor) cmd_english_tutor ;;
+  pronunciation:install) cmd_pronunciation_install "$arg" ;;
+  pronunciation:drill) shift || true; cmd_pronunciation_drill "$@" ;;
   env:info) cmd_env_info ;;
   env:clean) cmd_env_clean "$arg" ;;
 

@@ -3,6 +3,7 @@
 #include <SDL.h>
 
 #include <chrono>
+#include <cstdint>
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
@@ -227,6 +228,42 @@ bool sdl_play_s16_mono_22k(const std::vector<int16_t>& samples) {
 
     SDL_CloseAudioDevice(audio_dev);
     return true;
+}
+
+bool piper_synthesize_to_buffer(const std::string& text,
+                                const std::string& model_path,
+                                std::vector<int16_t>& samples_out,
+                                int& sample_rate_out) {
+    samples_out.clear();
+    sample_rate_out = 0;
+
+    const std::string temp_wav = piper_temp_wav_path();
+    if (!piper_synthesize_wav(text, model_path, temp_wav)) {
+        return false;
+    }
+
+    // Parse sample rate from the WAV header before using the standard reader.
+    {
+        std::ifstream file(temp_wav, std::ios::binary);
+        if (file) {
+            char hdr[44];
+            file.read(hdr, sizeof(hdr));
+            if (file.gcount() == static_cast<std::streamsize>(sizeof(hdr))) {
+                const auto u8 = [&](int i) {
+                    return static_cast<uint32_t>(static_cast<unsigned char>(hdr[i]));
+                };
+                sample_rate_out = static_cast<int>(
+                    u8(24) | (u8(25) << 8) | (u8(26) << 16) | (u8(27) << 24));
+            }
+        }
+    }
+
+    const bool ok = wav_read_s16_mono(temp_wav, samples_out);
+    std::filesystem::remove(temp_wav);
+    if (sample_rate_out <= 0) {
+        sample_rate_out = kPiperSampleRate;
+    }
+    return ok;
 }
 
 bool piper_speak_and_play(const std::string& text, const std::string& model_path) {

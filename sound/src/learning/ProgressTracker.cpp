@@ -22,6 +22,21 @@ void ProgressTracker::log_interaction(const std::string& user_text,
     store_.touch_vocab(tokenize(user_text));
 }
 
+void ProgressTracker::log_pronunciation(
+    const std::string& reference,
+    const std::string& transcript,
+    float pron_overall_0_100,
+    float intonation_overall_0_100,
+    const std::string& per_phoneme_json,
+    const std::vector<std::pair<std::string, float>>& per_phoneme_scores) {
+    if (!store_.is_open()) return;
+    store_.record_pronunciation_attempt(session_id_, reference, transcript,
+                                        pron_overall_0_100,
+                                        intonation_overall_0_100,
+                                        per_phoneme_json);
+    store_.touch_phoneme_mastery(per_phoneme_scores);
+}
+
 void ProgressTracker::close() {
     if (closed_) return;
     closed_ = true;

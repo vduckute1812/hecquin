@@ -4,13 +4,15 @@ A cross-platform audio processing module for the Robot Tutor project, providing 
 
 ## Overview
 
-The sound module consists of two main executables plus a small **AI / command routing** library used by the voice detector:
+The sound module consists of several executables plus a small **AI / command routing** library used by the voice detector:
 
 
-| Component          | Description                                                                                                                                                                                   | Technology                                                                             |
-| ------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------- |
-| **Voice Detector** | Captures audio, transcribes with Whisper, routes text through **CommandProcessor**, then speaks `**Action.reply`** with **Piper** + SDL playback (capture is paused during TTS to limit echo) | [whisper.cpp](https://github.com/ggerganov/whisper.cpp), **libcurl** (optional), Piper |
-| **Text-to-Speech** | Synthesizes natural-sounding speech from text input                                                                                                                                           | [Piper TTS](https://github.com/rhasspy/piper)                                          |
+| Component                 | Description                                                                                                                                                                                   | Technology                                                                             |
+| ------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------- |
+| **Voice Detector**        | Captures audio, transcribes with Whisper, routes text through **CommandProcessor**, then speaks `**Action.reply`** with **Piper** + SDL playback (capture is paused during TTS to limit echo) | [whisper.cpp](https://github.com/ggerganov/whisper.cpp), **libcurl** (optional), Piper |
+| **English Tutor**         | Grammar correction via Gemini chat completions + local SQLite/`sqlite-vec` RAG. Launched by voice (`"start english lesson"`) or via `./dev.sh english:tutor`.                                 | Whisper, Piper, libcurl, sqlite-vec                                                    |
+| **Pronunciation Drill**   | Read-aloud drill that scores per-phoneme pronunciation (wav2vec2 + CTC forced alignment + GOP) and sentence intonation (YIN pitch tracker + DTW). Launched via `./dev.sh pronunciation:drill` or the voice phrase `"start pronunciation drill"`. | Whisper, Piper, onnxruntime (optional), espeak-ng                                      |
+| **Text-to-Speech**        | Synthesizes natural-sounding speech from text input                                                                                                                                           | [Piper TTS](https://github.com/rhasspy/piper)                                          |
 
 
 Both audio programs use [SDL2](https://www.libsdl.org/) for cross-platform audio I/O. External AI calls use **OpenAI-compatible** `POST …/v1/chat/completions` when libcurl is available at configure time.
@@ -74,7 +76,12 @@ sound/
 │   ├── test_embedding_client_json.cpp
 │   ├── test_text_chunker.cpp
 │   ├── test_config_store.cpp
-│   └── test_learning_store.cpp
+│   ├── test_learning_store.cpp
+│   ├── test_phoneme_vocab.cpp       # Pronunciation — greedy IPA tokenizer
+│   ├── test_ctc_aligner.cpp         # Pronunciation — Viterbi on hand-crafted emissions
+│   ├── test_pronunciation_scorer.cpp# Pronunciation — logp → 0..100 + aggregation
+│   ├── test_pitch_tracker.cpp       # Prosody — YIN on synthetic sines
+│   └── test_intonation_scorer.cpp   # Prosody — DTW + final-direction rule
 ├── cmake/
 │   ├── project_options.cmake      # Compiler flags (C++17)
 │   ├── adhoc_codesign.cmake       # macOS ad-hoc signing helper
@@ -521,6 +528,13 @@ Reason: The past tense of "go" is the irregular form "went".
 | `HECQUIN_LEARNING_RAG_TOPK`      | `3`                                                  | Chunks pulled into the tutor prompt      |
 | `HECQUIN_LESSON_START_PHRASES`   | `start english lesson\|begin lesson\|start lesson`   | Voice triggers to enter lesson mode      |
 | `HECQUIN_LESSON_END_PHRASES`     | `exit lesson\|end lesson\|stop lesson`               | Voice triggers to leave lesson mode      |
+| `HECQUIN_DRILL_START_PHRASES`    | `start pronunciation drill\|begin pronunciation\|start drill` | Voice triggers to enter drill mode |
+| `HECQUIN_DRILL_END_PHRASES`      | `exit drill\|end drill\|stop drill`                  | Voice triggers to leave drill mode       |
+| `HECQUIN_DRILL_PASS_THRESHOLD`   | `75`                                                 | Overall score (0..100) that counts as a pass for the drill |
+| `HECQUIN_PRONUNCIATION_MODEL`    | `.env/shared/models/pronunciation/wav2vec2_phoneme.onnx` | wav2vec2 phoneme-CTC ONNX model          |
+| `HECQUIN_PRONUNCIATION_VOCAB`    | `.env/shared/models/pronunciation/vocab.json`        | HuggingFace-style token→id vocab for the above |
+| `HECQUIN_ONNX_PROVIDER`          | `cpu`                                                | onnxruntime execution provider (`cpu` / `coreml` / `cuda`) |
+| `HECQUIN_DRILL_SENTENCES`        | `.env/shared/learning/drill/sentences.txt`           | Optional newline-delimited pool of sentences the drill picks from |
 
 ### Dependencies (extra for the tutor)
 
@@ -528,6 +542,80 @@ Reason: The past tense of "go" is the irregular form "went".
 - **sqlite-vec** — downloaded automatically as an amalgamation into `third_party/sqlite-vec/` on first `cmake` configure. Override with `-DHECQUIN_DISABLE_SQLITE_VEC=ON` to fall back to in-process brute-force cosine search over a BLOB column.
 - **libcurl** (same as the base bot) — required for the embeddings HTTP call.
 
+
+## Pronunciation & Intonation Drill
+
+The drill extends the listener with a third mode (`ListenerMode::Drill`) that
+scores *read-aloud* attempts against a known reference sentence — so we can
+provide concrete, local, per-phoneme feedback without any cloud call on the
+acoustic path.
+
+### Pipeline
+
+```
+reference sentence ──► Piper TTS ──► PCM + reference F0 contour
+                                            │
+user speech ──► Whisper (transcript)        │
+            └── raw 16 kHz PCM ─────────────┤
+                                            ▼
+                               PhonemeModel (wav2vec2 + onnxruntime)
+                                            │   log-softmax emissions
+                                            ▼
+G2P (espeak-ng --ipa=3)  ──► target phoneme ids ──► CtcAligner (Viterbi)
+                                            │
+                                            ▼
+                                  PronunciationScorer
+                                  (GOP → 0..100 per phoneme/word/overall)
+                                            │
+user + reference PCM ──► PitchTracker (YIN) ──► IntonationScorer (DTW)
+                                            │
+                                            ▼
+                           PronunciationFeedbackAction → TTS
+                           ProgressTracker.log_pronunciation → SQLite
+```
+
+### Install the extra dependencies
+
+```bash
+# Download the wav2vec2 phoneme-CTC ONNX model + vocab.
+./dev.sh pronunciation:install
+
+# onnxruntime:
+brew install onnxruntime              # macOS (Homebrew)
+sudo apt install libonnxruntime-dev   # Debian / Ubuntu
+# Raspberry Pi / offline machines — `pronunciation:install` will drop
+# a prebuilt tarball into `.env/<platform>/onnxruntime/` for you.
+
+# espeak-ng is reused from Piper and must already be installed.
+```
+
+The build gracefully degrades when onnxruntime is not present: the module
+compiles, but `PhonemeModel::load()` returns false and the drill reports
+"pronunciation scoring unavailable — install onnxruntime".
+
+### Running
+
+```bash
+# Standalone binary (always starts directly in drill mode).
+./dev.sh pronunciation:drill
+
+# Or from the voice detector, just say the trigger phrase:
+#   "start pronunciation drill"   → enter drill mode
+#   "exit drill"                  → return to assistant mode
+```
+
+The robot picks a random sentence from `HECQUIN_DRILL_SENTENCES` (falling back
+to a built-in English pool), speaks it via Piper, and waits for the learner to
+repeat it. Every attempt is stored in the `pronunciation_attempts` SQLite table
+and aggregated per-IPA in `phoneme_mastery` so future drills can target weak
+phonemes.
+
+### Progress schema additions
+
+| Table                     | Notes                                                        |
+|---------------------------|--------------------------------------------------------------|
+| `pronunciation_attempts`  | One row per drill attempt (reference text, transcript, overall + intonation scores, lowest-scoring word/phoneme, JSON blobs for per-word and per-phoneme detail) |
+| `phoneme_mastery`         | `ipa PRIMARY KEY, attempts, avg_score, last_seen_at` — for weak-phoneme recommendation |
 
 ## CMake Configuration
 

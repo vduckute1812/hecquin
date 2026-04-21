@@ -4,6 +4,7 @@
 
 #include <cstdint>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace hecquin::learning {
@@ -26,6 +27,14 @@ public:
     void log_interaction(const std::string& user_text,
                          const std::string& corrected_text,
                          const std::string& grammar_notes);
+
+    /** Record one pronunciation / intonation drill attempt + phoneme-mastery roll-up. */
+    void log_pronunciation(const std::string& reference,
+                           const std::string& transcript,
+                           float pron_overall_0_100,
+                           float intonation_overall_0_100,
+                           const std::string& per_phoneme_json,
+                           const std::vector<std::pair<std::string, float>>& per_phoneme_scores);
 
     /** Manually finalize; also called from the destructor. Idempotent. */
     void close();

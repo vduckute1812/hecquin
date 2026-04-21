@@ -31,6 +31,10 @@ struct Action {
             return "EnglishLesson";
         case ActionKind::LessonModeToggle:
             return "LessonModeToggle";
+        case ActionKind::PronunciationFeedback:
+            return "PronunciationFeedback";
+        case ActionKind::DrillModeToggle:
+            return "DrillModeToggle";
     }
     return "Unknown";
 }

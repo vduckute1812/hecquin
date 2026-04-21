@@ -50,8 +50,8 @@ int main() {
     CommandProcessor commands(cfg.ai);
     VoiceListener listener(app.whisper(), app.capture(), commands,
                            app.running(), app.piper_model_path());
-    listener.setTutorCallback([&tutor](const std::string& transcript) {
-        return tutor.process(transcript);
+    listener.setTutorCallback([&tutor](const Utterance& u) {
+        return tutor.process(u.transcript);
     });
     listener.setInitialMode(ListenerMode::Lesson);
 

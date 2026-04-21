@@ -7,6 +7,16 @@
 /** Run Piper to write a WAV file (16-bit mono, typically 22050 Hz). */
 bool piper_synthesize_wav(const std::string& text, const std::string& model_path, const std::string& output_wav_path);
 
+/**
+ * Synthesise `text` and return the resulting mono int16 samples plus the
+ * sample rate parsed from the WAV header.  The temp file is removed before
+ * returning.  Returns false on any failure.
+ */
+bool piper_synthesize_to_buffer(const std::string& text,
+                                const std::string& model_path,
+                                std::vector<int16_t>& samples_out,
+                                int& sample_rate_out);
+
 /** Read a standard PCM WAV (44-byte header) into interleaved or mono int16 samples. */
 bool wav_read_s16_mono(const std::string& filename, std::vector<int16_t>& samples_out);
 

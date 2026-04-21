@@ -57,3 +57,28 @@ if (HECQUIN_HAS_SQLITE)
         ${HECQUIN_SOUND_TEST_SRC_ROOT}/test_learning_store.cpp)
     target_link_libraries(hecquin_sound_test_learning_store PRIVATE hecquin_learning)
 endif ()
+
+# Pronunciation & prosody — PhonemeVocab greedy IPA tokenizer.
+hecquin_add_unit_test(hecquin_sound_test_phoneme_vocab
+    ${HECQUIN_SOUND_TEST_SRC_ROOT}/test_phoneme_vocab.cpp)
+target_link_libraries(hecquin_sound_test_phoneme_vocab PRIVATE hecquin_pronunciation)
+
+# Pronunciation & prosody — CTC forced aligner on a hand-crafted trellis.
+hecquin_add_unit_test(hecquin_sound_test_ctc_aligner
+    ${HECQUIN_SOUND_TEST_SRC_ROOT}/test_ctc_aligner.cpp)
+target_link_libraries(hecquin_sound_test_ctc_aligner PRIVATE hecquin_pronunciation)
+
+# Pronunciation & prosody — GOP logp → 0..100 scorer.
+hecquin_add_unit_test(hecquin_sound_test_pronunciation_scorer
+    ${HECQUIN_SOUND_TEST_SRC_ROOT}/test_pronunciation_scorer.cpp)
+target_link_libraries(hecquin_sound_test_pronunciation_scorer PRIVATE hecquin_pronunciation)
+
+# Pronunciation & prosody — YIN pitch tracker on synthetic sine waves.
+hecquin_add_unit_test(hecquin_sound_test_pitch_tracker
+    ${HECQUIN_SOUND_TEST_SRC_ROOT}/test_pitch_tracker.cpp)
+target_link_libraries(hecquin_sound_test_pitch_tracker PRIVATE hecquin_prosody)
+
+# Pronunciation & prosody — IntonationScorer DTW + direction rule.
+hecquin_add_unit_test(hecquin_sound_test_intonation_scorer
+    ${HECQUIN_SOUND_TEST_SRC_ROOT}/test_intonation_scorer.cpp)
+target_link_libraries(hecquin_sound_test_intonation_scorer PRIVATE hecquin_prosody)

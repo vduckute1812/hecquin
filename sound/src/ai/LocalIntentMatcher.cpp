@@ -3,6 +3,7 @@
 #include "actions/DeviceAction.hpp"
 #include "actions/GrammarCorrectionAction.hpp"
 #include "actions/MusicAction.hpp"
+#include "actions/PronunciationFeedbackAction.hpp"
 #include "actions/TopicSearchAction.hpp"
 #include "common/StringUtils.hpp"
 
@@ -29,6 +30,10 @@ struct Patterns {
                              std::regex_constants::ECMAScript | std::regex_constants::icase};
     std::regex lesson_end{R"(\b(exit|end|stop|quit)\s+(english\s+)?lesson\b)",
                            std::regex_constants::ECMAScript | std::regex_constants::icase};
+    std::regex drill_start{R"(\b(start|begin|open)\s+(pronunciation|drill)\b)",
+                            std::regex_constants::ECMAScript | std::regex_constants::icase};
+    std::regex drill_end{R"(\b(exit|end|stop|quit)\s+(pronunciation\s+)?drill\b)",
+                          std::regex_constants::ECMAScript | std::regex_constants::icase};
 };
 
 const Patterns& patterns() {
@@ -57,6 +62,20 @@ std::optional<Action> LocalIntentMatcher::match(const std::string& transcript) c
         LessonModeToggleAction a;
         a.enable = false;
         a.reply = "Lesson mode off.";
+        return a.into_action(trimmed);
+    }
+
+    if (std::regex_search(normalized, p.drill_start)) {
+        DrillModeToggleAction a;
+        a.enable = true;
+        a.reply = "Pronunciation drill on. Repeat after me.";
+        return a.into_action(trimmed);
+    }
+
+    if (std::regex_search(normalized, p.drill_end)) {
+        DrillModeToggleAction a;
+        a.enable = false;
+        a.reply = "Drill mode off.";
         return a.into_action(trimmed);
     }
 

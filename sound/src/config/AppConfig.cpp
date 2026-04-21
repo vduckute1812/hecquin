@@ -62,6 +62,38 @@ AppConfig AppConfig::load(const char* env_file_path, const char* prompts_dir) {
     if (!end_phrases.empty()) {
         cfg.learning.lesson_end_phrases = end_phrases;
     }
+    const std::string drill_start = store.resolve("HECQUIN_DRILL_START_PHRASES");
+    if (!drill_start.empty()) {
+        cfg.learning.drill_start_phrases = drill_start;
+    }
+    const std::string drill_end = store.resolve("HECQUIN_DRILL_END_PHRASES");
+    if (!drill_end.empty()) {
+        cfg.learning.drill_end_phrases = drill_end;
+    }
+    const std::string drill_pass = store.resolve("HECQUIN_DRILL_PASS_THRESHOLD");
+    if (!drill_pass.empty()) {
+        try {
+            cfg.learning.drill_pass_threshold = std::stoi(drill_pass);
+        } catch (...) {
+        }
+    }
+
+    const std::string pron_model = store.resolve("HECQUIN_PRONUNCIATION_MODEL");
+    if (!pron_model.empty()) {
+        cfg.pronunciation.model_path = pron_model;
+    }
+    const std::string pron_vocab = store.resolve("HECQUIN_PRONUNCIATION_VOCAB");
+    if (!pron_vocab.empty()) {
+        cfg.pronunciation.vocab_path = pron_vocab;
+    }
+    const std::string pron_provider = store.resolve("HECQUIN_ONNX_PROVIDER");
+    if (!pron_provider.empty()) {
+        cfg.pronunciation.onnx_provider = pron_provider;
+    }
+    const std::string drill_sentences = store.resolve("HECQUIN_DRILL_SENTENCES");
+    if (!drill_sentences.empty()) {
+        cfg.pronunciation.drill_sentences_path = drill_sentences;
+    }
 
     return cfg;
 }

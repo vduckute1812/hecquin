@@ -10,4 +10,6 @@ enum class ActionKind {
     AssistantSdk,
     EnglishLesson,
     LessonModeToggle,
+    PronunciationFeedback,
+    DrillModeToggle,
 };

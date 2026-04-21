@@ -2,12 +2,14 @@
 
 ## Overview
 
-The Hecquin Sound Module is a cross-platform audio processing subsystem for the Robot Tutor project. It provides two core capabilities:
+The Hecquin Sound Module is a cross-platform audio processing subsystem for the Robot Tutor project. It provides four core capabilities:
 
 - **Voice-to-Text**: Speech recognition via whisper.cpp
 - **Text-to-Speech**: Speech synthesis via Piper TTS
+- **English Tutor (Lesson mode)**: Grammar correction via RAG + chat completions
+- **Pronunciation & Intonation Drill (Drill mode)**: Per-phoneme and prosody scoring against a known reference, fully local (wav2vec2 + YIN)
 
-The system captures microphone audio, detects speech with VAD (Voice Activity Detection), transcribes it, routes the transcript to a local command matcher or external AI API, then speaks the reply back through the speaker.
+The system captures microphone audio, detects speech with VAD (Voice Activity Detection), transcribes it, routes the transcript (and, for Drill mode, the raw PCM) to a local command matcher, the tutor processor, or the drill processor, then speaks the reply back through the speaker.
 
 ---
 
@@ -66,21 +68,33 @@ src/
 ├── common/
 │   └── StringUtils.hpp           — header-only trim/lower/starts_with
 ├── learning/
-│   ├── LearningStore.hpp/cpp     — SQLite + sqlite-vec store
+│   ├── LearningStore.hpp/cpp     — SQLite + sqlite-vec store (docs, sessions, interactions, vocab, pronunciation_attempts, phoneme_mastery)
 │   ├── EmbeddingClient.hpp/cpp   — Gemini embeddings (OpenAI-compat, batched)
 │   ├── Ingestor.hpp/cpp          — curriculum → chunks → embeddings
 │   ├── TextChunker.hpp/cpp       — standalone chunking utility
 │   ├── RetrievalService.hpp/cpp  — vector search helpers
-│   ├── ProgressTracker.hpp/cpp   — per-user learning log
+│   ├── ProgressTracker.hpp/cpp   — per-user learning log (grammar + pronunciation)
 │   ├── EnglishTutorProcessor.*   — RAG + grammar correction pipeline
-│   └── cli/                      — `english_ingest`, `english_tutor` entries
+│   ├── PronunciationDrillProcessor.hpp/cpp — sentence picker + scoring orchestrator
+│   ├── pronunciation/            — wav2vec2 + CTC forced alignment + GOP
+│   │   ├── PhonemeTypes.hpp      — shared data structs (Emissions, AlignSegment, …)
+│   │   ├── PhonemeVocab.hpp/cpp  — IPA ↔ id tokenizer (greedy longest-match)
+│   │   ├── PhonemeModel.hpp/cpp  — ONNX Runtime wrapper (optional: HECQUIN_WITH_ONNX)
+│   │   ├── G2P.hpp/cpp           — espeak-ng --ipa=3 → target phoneme ids
+│   │   ├── CtcAligner.hpp/cpp    — Viterbi forced alignment
+│   │   └── PronunciationScorer.hpp/cpp — logp → 0..100 per phoneme / word / overall
+│   ├── prosody/                  — local intonation pipeline
+│   │   ├── PitchTracker.hpp/cpp  — YIN F0 contour + per-frame RMS
+│   │   └── IntonationScorer.hpp/cpp — semitone DTW + final-direction rule
+│   └── cli/                      — `english_ingest`, `english_tutor`, `pronunciation_drill` entries
 ├── actions/
-│   ├── ActionKind.hpp            — enum: None / LocalDevice / TopicSearch / Music / ExternalApi / AssistantSdk
+│   ├── ActionKind.hpp            — enum: None / LocalDevice / TopicSearch / Music / ExternalApi / AssistantSdk / GrammarCorrection / LessonModeToggle / PronunciationFeedback / DrillModeToggle
 │   ├── Action.hpp                — {kind, reply, transcript}
 │   ├── DeviceAction.hpp          — power control confirmation text
 │   ├── ExternalApiAction.hpp     — wraps API response
 │   ├── TopicSearchAction.hpp     — story/topic prompt
 │   ├── MusicAction.hpp           — music intent
+│   ├── PronunciationFeedbackAction.hpp — drill score + weakest-phoneme feedback + DrillModeToggle
 │   └── NoneAction.hpp            — empty transcript guard
 ├── config/
 │   ├── ConfigStore.hpp/cpp       — dotenv loader (env vars take precedence)
@@ -229,6 +243,10 @@ piper_speak_and_play(text, model):
 | `InteractionMusicSearch` | Music regex match | User prompt text |
 | `ExternalApi` | HTTP API call | API assistant reply |
 | `AssistantSdk` | (reserved) | — |
+| `GrammarCorrection` | `EnglishTutorProcessor` (Lesson mode) | "You said … / Better … / Reason …" |
+| `LessonModeToggle` | Lesson start/end regex match | Short confirmation; flips `ListenerMode` |
+| `PronunciationFeedback` | `PronunciationDrillProcessor` | Overall score + weakest word/phoneme + intonation note; next sentence announced after playback |
+| `DrillModeToggle` | Drill start/end regex match | Short confirmation; flips `ListenerMode::Drill` |
 
 ---
 
@@ -256,19 +274,28 @@ CMake modular structure under `cmake/`:
 | `deps_whisper.cmake` | whisper.cpp (platform-aware search) |
 | `deps_piper.cmake` | Piper binary + model path discovery |
 | `deps_curl.cmake` | libcurl (optional; sets `HECQUIN_WITH_CURL`) |
+| `deps_sqlite_vec.cmake` | SQLite + sqlite-vec (optional; sets `HECQUIN_HAS_SQLITE`) |
+| `deps_onnxruntime.cmake` | onnxruntime (optional; sets `HECQUIN_WITH_ONNX`) |
 | `dependency_libraries.cmake` | Interface library wrappers |
+| `sound_libs.cmake` | Internal static libs: `hecquin_config`, `hecquin_ai`, `hecquin_voice_pipeline`, `hecquin_learning`, `hecquin_prosody`, `hecquin_pronunciation`, `hecquin_drill` |
 | `voice_to_text.cmake` | `voice_detector` executable |
 | `text_to_speech.cmake` | `text_to_speech` executable |
+| `english_tutor.cmake` | `english_ingest` + `english_tutor` executables |
+| `pronunciation_drill.cmake` | `pronunciation_drill` executable |
 | `piper_speech.cmake` | `hecquin_piper_speech` static library |
-| `sound_tests.cmake` | `hecquin_sound_test_openai_chat` test binary |
+| `sound_tests.cmake` | CTest unit tests (`openai_chat`, `local_intent`, `embedding_json`, `text_chunker`, `config_store`, `learning_store`, `phoneme_vocab`, `ctc_aligner`, `pronunciation_scorer`, `pitch_tracker`, `intonation_scorer`) |
 
 Key preprocessor defines set by CMake:
 
 | Define | Meaning |
 |---|---|
 | `HECQUIN_WITH_CURL` | libcurl found; external API enabled |
+| `HECQUIN_HAS_SQLITE` | SQLite + sqlite-vec available; learning / drill schema enabled |
+| `HECQUIN_WITH_ONNX` | onnxruntime found; wav2vec2 pronunciation scoring enabled |
 | `DEFAULT_MODEL_PATH` | Whisper GGML model path |
 | `DEFAULT_PIPER_MODEL_PATH` | Piper voice model path |
+| `DEFAULT_PRONUNCIATION_MODEL_PATH` | wav2vec2 phoneme-CTC ONNX model path |
+| `DEFAULT_PRONUNCIATION_VOCAB_PATH` | vocab.json path for the phoneme model |
 | `DEFAULT_CONFIG_PATH` | Absolute path to `.env/config.env` |
 | `DEFAULT_PROMPTS_DIR` | Absolute path to `.env/prompts/` |
 | `PIPER_EXECUTABLE` | Path to piper binary |
@@ -301,15 +328,17 @@ Whisper/Piper models are shared across platforms in `.env/shared/models/`.
 `dev.sh` provides unified commands:
 
 ```
-./dev.sh install:all       # full setup: deps → whisper → piper → models → cmake build
-./dev.sh build             # cmake configure + build
+./dev.sh install:all            # full setup: deps → whisper → piper → models → cmake build
+./dev.sh build                  # cmake configure + build
 ./dev.sh run voice_detector
 ./dev.sh run text_to_speech "hello world"
-./dev.sh speak "hello"     # shorthand for TTS playback
-./dev.sh curriculum:fetch  # download public English-learning datasets
-./dev.sh learning:ingest   # chunk → embed → insert into SQLite vector DB
-./dev.sh english:tutor     # launch lesson-mode voice loop
-./dev.sh env:clean         # wipe platform build outputs
+./dev.sh speak "hello"          # shorthand for TTS playback
+./dev.sh curriculum:fetch       # download public English-learning datasets
+./dev.sh learning:ingest        # chunk → embed → insert into SQLite vector DB
+./dev.sh english:tutor          # launch lesson-mode voice loop
+./dev.sh pronunciation:install  # download wav2vec2 phoneme model + vocab (+ prebuilt onnxruntime when no package manager)
+./dev.sh pronunciation:drill    # launch drill-mode voice loop
+./dev.sh env:clean              # wipe platform build outputs
 ```
 
 ---
@@ -390,3 +419,107 @@ pipeline works unchanged (just slower on large curricula).
 `AiClientConfig` grows `embeddings_url`, `embedding_model`, `embedding_dim`, and
 `tutor_system_prompt`. `AppConfig` gains a `LearningConfig` block that reads the
 `HECQUIN_LEARNING_*` env variables (see README for the full table).
+
+---
+
+## Pronunciation & Intonation Drill Subsystem
+
+The drill shares the voice capture / VAD / whisper transcription path with the
+assistant but adds a **third listener mode** (`ListenerMode::Drill`), a raw-PCM
+channel from the listener, and a fully-local scoring stack. No cloud call is
+made on the acoustic path.
+
+### Mode switching & data plumbing
+
+`VoiceListener` now carries two parallel callbacks — `TutorCallback` (Lesson
+mode) and `DrillCallback` (Drill mode) — and, because drill scoring needs the
+raw acoustic signal, the callbacks receive an `Utterance { transcript, pcm_16k
+}` rather than a bare string. `LocalIntentMatcher` gained
+`DrillModeToggleAction` pattern groups that fire the same way
+`LessonModeToggle` does, and the listener exposes `setDrillAnnounceCallback()`
+so the drill processor can queue the next sentence after any feedback TTS has
+finished playing.
+
+### Scoring pipeline
+
+```
+reference sentence (sampled by PronunciationDrillProcessor)
+    │
+    ├── Piper TTS ──► piper_synthesize_to_buffer ──► 22050 Hz int16 PCM
+    │                       │
+    │                       └── PitchTracker (22050 Hz config) ──► reference F0 contour
+    │                       └── SDL2 playback to speaker
+    │
+user speech (captured in Drill mode)
+    │
+    ├── WhisperEngine ──► transcript (for logging / weak-word heuristics)
+    │
+    └── raw 16 kHz float32 PCM
+              │
+              ├── PhonemeModel (ONNX, wav2vec2 phoneme-CTC)
+              │     ├── Emissions (log-softmax, ~20 ms stride)
+              │     └── G2P.generate(reference) ──► target phoneme ids
+              │           └── espeak-ng --ipa=3 → PhonemeVocab::tokenize_ipa
+              │
+              ├── CtcAligner.align(emissions, targets) ──► per-phoneme frame spans
+              ├── PronunciationScorer.score(plan, alignment) ──► GOP → 0..100
+              └── PitchTracker (16 kHz config) ──► user F0 contour
+                         │
+                         └── IntonationScorer.score(reference, user)
+                                    └── DTW on semitones (median-normalised)
+                                    └── final-phrase direction check
+```
+
+The resulting `PronunciationFeedbackAction` carries the overall score, the
+weakest word + phoneme, an intonation note, and a flag for the "next sentence"
+announcement. After `VoiceListener` speaks the feedback, it invokes the queued
+`drill_announce_cb_` to play the next target.
+
+### Data structures (see `src/learning/pronunciation/PhonemeTypes.hpp`)
+
+| Type                | Role                                                           |
+|---------------------|----------------------------------------------------------------|
+| `PhonemeToken`      | `{id, ipa}` — one phoneme in model-vocab space                  |
+| `WordPhonemes`      | `{word, phonemes}` — G2P output for a single word               |
+| `G2PResult`         | Whole-utterance G2P with `flat_ids()` helper                    |
+| `Emissions`         | `{logits[T][V], frame_stride_ms, blank_id}` from wav2vec2       |
+| `AlignSegment`      | `{phoneme_id, start_frame, end_frame, log_posterior}`           |
+| `AlignResult`       | `{segments, ok}` from forced alignment                          |
+| `PhonemeScore`      | `{ipa, score_0_100, start_frame, end_frame}`                    |
+| `WordScore`         | Aggregates `phonemes` into a word-level score                   |
+| `PronunciationScore`| Overall + per-word breakdown                                    |
+
+### Progress schema additions
+
+`LearningStore` grows two tables (guarded by the same SQLite migrations as the
+English-tutor tables):
+
+| Table                     | Columns                                                    |
+|---------------------------|------------------------------------------------------------|
+| `pronunciation_attempts`  | `id, session_id, reference_text, user_transcript, overall_0_100, intonation_0_100, lowest_word, lowest_phoneme, words_json, phonemes_json, issues_json, created_at` |
+| `phoneme_mastery`         | `ipa PRIMARY KEY, attempts, avg_score, last_seen_at` |
+
+`ProgressTracker::log_pronunciation()` writes both tables atomically in one
+transaction so per-phoneme mastery stays consistent with the raw attempts log.
+
+### Optional onnxruntime
+
+The pronunciation module links against the `hecquin_deps_onnxruntime` interface
+target regardless of whether onnxruntime was actually found on the system. When
+found, CMake defines `HECQUIN_WITH_ONNX=1`; `PhonemeModel::load()` opens the
+ONNX session and `infer()` returns real emissions. Otherwise `PhonemeModel` is
+compiled as a no-op stub, `load()` returns false, and
+`PronunciationDrillProcessor` reports "pronunciation scoring unavailable" in
+TTS while still exercising the intonation path (which has no external deps).
+
+### Configuration additions (`.env/config.env`)
+
+| Key                              | Meaning                                                        |
+|----------------------------------|----------------------------------------------------------------|
+| `HECQUIN_DRILL_START_PHRASES`    | `\|`-separated regex triggers that enter `ListenerMode::Drill` |
+| `HECQUIN_DRILL_END_PHRASES`      | `\|`-separated regex triggers that leave drill mode            |
+| `HECQUIN_DRILL_PASS_THRESHOLD`   | Overall score (0..100) counted as a "pass"                     |
+| `HECQUIN_DRILL_SENTENCES`        | Optional newline-delimited sentence pool                       |
+| `HECQUIN_PRONUNCIATION_MODEL`    | Path to the wav2vec2 phoneme-CTC ONNX model                    |
+| `HECQUIN_PRONUNCIATION_VOCAB`    | Path to the HuggingFace-style `vocab.json`                     |
+| `HECQUIN_ONNX_PROVIDER`          | onnxruntime execution provider (`cpu` / `coreml` / `cuda`)     |

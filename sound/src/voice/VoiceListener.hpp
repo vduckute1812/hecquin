@@ -23,16 +23,34 @@ struct VoiceListenerConfig {
 enum class ListenerMode {
     Assistant,
     Lesson,
+    Drill,
 };
 
-using TutorCallback = std::function<Action(const std::string&)>;
+/**
+ * One captured utterance handed to a lesson- / drill-mode callback.
+ *
+ * The raw PCM buffer is kept alongside the transcript because pronunciation
+ * and intonation scoring need the acoustic frames, not just the words.  The
+ * buffer stays mono float32 at `AudioCapture`'s configured sample rate
+ * (16 kHz by default) so downstream modules can feed wav2vec2 / YIN directly.
+ */
+struct Utterance {
+    std::string transcript;
+    std::vector<float> pcm_16k;
+};
+
+using TutorCallback = std::function<Action(const Utterance&)>;
+
+/** Callback that provides an opening prompt whenever the listener enters drill mode. */
+using DrillAnnounceCallback = std::function<void()>;
 
 /**
  * VAD-driven listen loop: capture → Whisper → CommandProcessor / tutor callback → Piper reply.
  *
- * In `Assistant` mode transcripts flow through `CommandProcessor`. In `Lesson` mode they
- * flow through the attached tutor callback (if any). Voice commands
- * "start/exit english lesson" flip the mode via a `LessonModeToggle` action.
+ * In `Assistant` mode transcripts flow through `CommandProcessor`. In `Lesson` and
+ * `Drill` modes they flow through the attached tutor callback (if any).  Voice
+ * commands `start/exit english lesson` and `start/exit pronunciation drill`
+ * flip the mode via `LessonModeToggle` / `DrillModeToggle` actions.
  */
 class VoiceListener {
 public:
@@ -43,10 +61,16 @@ public:
                   std::string piper_model_path,
                   VoiceListenerConfig cfg = {});
 
-    /** Install a lesson-mode handler. Optional — without one, lesson mode falls back to Assistant. */
+    /** Install a lesson/drill-mode handler. Without one, lesson/drill mode falls back to Assistant. */
     void setTutorCallback(TutorCallback cb) { tutor_cb_ = std::move(cb); }
 
-    /** Force-start in lesson mode (used by the dedicated english_tutor binary). */
+    /** Install a drill-mode handler (separate from lesson so processors can coexist). */
+    void setDrillCallback(TutorCallback cb) { drill_cb_ = std::move(cb); }
+
+    /** Optional hook invoked when the listener enters drill mode (announce the first sentence). */
+    void setDrillAnnounceCallback(DrillAnnounceCallback cb) { drill_announce_cb_ = std::move(cb); }
+
+    /** Force-start in a specific mode (used by the dedicated english_tutor / pronunciation_drill binaries). */
     void setInitialMode(ListenerMode mode) { mode_ = mode; }
 
     void run();
@@ -56,14 +80,17 @@ private:
     static float rms(const std::vector<float>& samples, size_t start, size_t end);
     static std::string sanitizeForTts(std::string s);
     void speakReply(const Action& action);
-    Action routeTranscript(const std::string& transcript);
+    Action routeUtterance(const Utterance& utterance);
 
     WhisperEngine& whisper_;
     AudioCapture& capture_;
     CommandProcessor& commands_;
     TutorCallback tutor_cb_;
+    TutorCallback drill_cb_;
+    DrillAnnounceCallback drill_announce_cb_;
     std::atomic<bool>& app_running_;
     std::string piper_model_path_;
     VoiceListenerConfig cfg_;
     ListenerMode mode_ = ListenerMode::Assistant;
+    bool pending_drill_announce_ = false;
 };

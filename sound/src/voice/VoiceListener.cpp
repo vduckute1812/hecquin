@@ -56,8 +56,11 @@ std::string VoiceListener::sanitizeForTts(std::string s) {
 }
 
 void VoiceListener::speakReply(const Action& action) {
+    const char* mode_label = "assistant";
+    if (mode_ == ListenerMode::Lesson) mode_label = "lesson";
+    else if (mode_ == ListenerMode::Drill) mode_label = "drill";
     std::cout << "🤖 Route: " << actionKindLabel(action.kind)
-              << "  mode=" << (mode_ == ListenerMode::Lesson ? "lesson" : "assistant") << std::endl;
+              << "  mode=" << mode_label << std::endl;
     if (action.reply.empty()) {
         return;
     }
@@ -73,9 +76,12 @@ void VoiceListener::speakReply(const Action& action) {
     capture_.resumeDevice();
 }
 
-Action VoiceListener::routeTranscript(const std::string& transcript) {
+Action VoiceListener::routeUtterance(const Utterance& utterance) {
+    const std::string& transcript = utterance.transcript;
+
     // Always give the fast local matcher a chance first — this is what lets the user
-    // switch modes by voice ("start english lesson" / "exit lesson") from either side.
+    // switch modes by voice ("start english lesson" / "exit lesson" /
+    // "start pronunciation drill" / "exit drill") from any current mode.
     if (auto local = commands_.match_local(transcript)) {
         if (local->kind == ActionKind::LessonModeToggle) {
             static const std::regex re_start(
@@ -84,12 +90,22 @@ Action VoiceListener::routeTranscript(const std::string& transcript) {
             mode_ = std::regex_search(transcript, re_start)
                         ? ListenerMode::Lesson
                         : ListenerMode::Assistant;
+        } else if (local->kind == ActionKind::DrillModeToggle) {
+            static const std::regex re_drill_start(
+                R"(\b(start|begin|open)\s+(pronunciation|drill)\b)",
+                std::regex_constants::ECMAScript | std::regex_constants::icase);
+            const bool enable = std::regex_search(transcript, re_drill_start);
+            mode_ = enable ? ListenerMode::Drill : ListenerMode::Assistant;
+            pending_drill_announce_ = enable && static_cast<bool>(drill_announce_cb_);
         }
         return *local;
     }
 
+    if (mode_ == ListenerMode::Drill && drill_cb_) {
+        return drill_cb_(utterance);
+    }
     if (mode_ == ListenerMode::Lesson && tutor_cb_) {
-        return tutor_cb_(transcript);
+        return tutor_cb_(utterance);
     }
     // Fall back to the external API (handled by the full `process` pipeline).
     return commands_.process(transcript);
@@ -131,9 +147,22 @@ void VoiceListener::run() {
 
                 const std::string transcript = whisper_.transcribe(live);
                 if (!transcript.empty()) {
+                    Utterance utterance{transcript, live};
                     std::future<Action> fut = std::async(std::launch::async,
-                        [this, transcript]() { return routeTranscript(transcript); });
-                    speakReply(fut.get());
+                        [this, u = std::move(utterance)]() { return routeUtterance(u); });
+                    const Action action = fut.get();
+                    speakReply(action);
+                    // After a scored drill attempt, automatically announce the
+                    // next target sentence so the session flows without
+                    // requiring a new wake phrase between attempts.
+                    if (action.kind == ActionKind::PronunciationFeedback &&
+                        mode_ == ListenerMode::Drill && drill_announce_cb_) {
+                        pending_drill_announce_ = true;
+                    }
+                    if (pending_drill_announce_ && drill_announce_cb_) {
+                        pending_drill_announce_ = false;
+                        drill_announce_cb_();
+                    }
                     std::cout << std::endl;
                 }
 

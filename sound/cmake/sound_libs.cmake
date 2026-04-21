@@ -89,6 +89,54 @@ if (HECQUIN_HAS_SQLITE AND NOT TARGET hecquin_learning)
     set_target_properties(hecquin_learning PROPERTIES POSITION_INDEPENDENT_CODE ON)
 endif ()
 
+# ---- hecquin_prosody ---------------------------------------------------------
+# Pure-C++ YIN pitch tracker + DTW-based intonation scorer.  No external deps.
+if (NOT TARGET hecquin_prosody)
+    add_library(hecquin_prosody STATIC
+        ${HECQUIN_SOUND_SRC_ROOT}/learning/prosody/PitchTracker.cpp
+        ${HECQUIN_SOUND_SRC_ROOT}/learning/prosody/IntonationScorer.cpp
+    )
+    target_include_directories(hecquin_prosody PUBLIC ${HECQUIN_SOUND_SRC_ROOT})
+    set_target_properties(hecquin_prosody PROPERTIES POSITION_INDEPENDENT_CODE ON)
+endif ()
+
+# ---- hecquin_pronunciation ---------------------------------------------------
+# wav2vec2 phoneme model + G2P + CTC forced alignment + GOP scorer.
+# onnxruntime is optional; without it the module still links but
+# `PhonemeModel::load()` returns false and the drill processor reports
+# "scoring unavailable".
+if (NOT TARGET hecquin_pronunciation)
+    add_library(hecquin_pronunciation STATIC
+        ${HECQUIN_SOUND_SRC_ROOT}/learning/pronunciation/PhonemeVocab.cpp
+        ${HECQUIN_SOUND_SRC_ROOT}/learning/pronunciation/G2P.cpp
+        ${HECQUIN_SOUND_SRC_ROOT}/learning/pronunciation/CtcAligner.cpp
+        ${HECQUIN_SOUND_SRC_ROOT}/learning/pronunciation/PronunciationScorer.cpp
+        ${HECQUIN_SOUND_SRC_ROOT}/learning/pronunciation/PhonemeModel.cpp
+    )
+    target_include_directories(hecquin_pronunciation PUBLIC ${HECQUIN_SOUND_SRC_ROOT})
+    target_link_libraries(hecquin_pronunciation
+        PUBLIC hecquin_deps_json hecquin_deps_onnxruntime)
+    set_target_properties(hecquin_pronunciation PROPERTIES POSITION_INDEPENDENT_CODE ON)
+endif ()
+
+# ---- hecquin_drill -----------------------------------------------------------
+# Orchestrator that ties pronunciation + prosody + piper + store together.
+# Needs SQLite (progress logging) + piper (reference TTS) + json.
+if (HECQUIN_HAS_SQLITE AND NOT TARGET hecquin_drill)
+    add_library(hecquin_drill STATIC
+        ${HECQUIN_SOUND_SRC_ROOT}/learning/PronunciationDrillProcessor.cpp
+    )
+    target_include_directories(hecquin_drill PUBLIC ${HECQUIN_SOUND_SRC_ROOT})
+    target_link_libraries(hecquin_drill PUBLIC
+        hecquin_config
+        hecquin_learning
+        hecquin_pronunciation
+        hecquin_prosody
+        hecquin_piper_speech
+        hecquin_deps_json)
+    set_target_properties(hecquin_drill PROPERTIES POSITION_INDEPENDENT_CODE ON)
+endif ()
+
 # ---- Helper: set runtime-path compile defs ----------------------------------
 # Adds DEFAULT_MODEL_PATH / DEFAULT_CONFIG_PATH / DEFAULT_PROMPTS_DIR to a
 # target in one call — replaces the per-executable copy-pastes.

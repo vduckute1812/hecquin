@@ -246,6 +246,24 @@ bool LearningStore::run_migrations_() {
                "  mastery INTEGER NOT NULL DEFAULT 0"
                ");")) return false;
 
+    if (!exec_("CREATE TABLE IF NOT EXISTS pronunciation_attempts ("
+               "  id INTEGER PRIMARY KEY AUTOINCREMENT,"
+               "  session_id INTEGER REFERENCES sessions(id),"
+               "  reference TEXT NOT NULL,"
+               "  transcript TEXT,"
+               "  pron_overall REAL,"
+               "  intonation_overall REAL,"
+               "  per_phoneme_json TEXT,"
+               "  created_at INTEGER NOT NULL"
+               ");")) return false;
+
+    if (!exec_("CREATE TABLE IF NOT EXISTS phoneme_mastery ("
+               "  ipa TEXT PRIMARY KEY,"
+               "  attempts INTEGER NOT NULL DEFAULT 0,"
+               "  avg_score REAL NOT NULL DEFAULT 0.0,"
+               "  last_seen_at INTEGER NOT NULL"
+               ");")) return false;
+
     if (has_vec0_) {
         std::ostringstream sql;
         sql << "CREATE VIRTUAL TABLE IF NOT EXISTS vec_documents USING vec0("
@@ -628,6 +646,90 @@ void LearningStore::touch_vocab(const std::vector<std::string>& words) {
     }
 
     tx.commit();
+#endif
+}
+
+void LearningStore::record_pronunciation_attempt(int64_t session_id,
+                                                 const std::string& reference,
+                                                 const std::string& transcript,
+                                                 float pron_overall_0_100,
+                                                 float intonation_overall_0_100,
+                                                 const std::string& per_phoneme_json) {
+#ifndef HECQUIN_WITH_SQLITE
+    (void)session_id; (void)reference; (void)transcript;
+    (void)pron_overall_0_100; (void)intonation_overall_0_100; (void)per_phoneme_json;
+#else
+    if (!db_) return;
+    auto q = prepare_or_log(db_,
+        "INSERT INTO pronunciation_attempts (session_id, reference, transcript, "
+        "  pron_overall, intonation_overall, per_phoneme_json, created_at) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?);",
+        "pron.record");
+    if (!q) return;
+    if (session_id > 0) {
+        sqlite3_bind_int64(q.get(), 1, session_id);
+    } else {
+        sqlite3_bind_null(q.get(), 1);
+    }
+    sqlite3_bind_text(q.get(), 2, reference.c_str(),  -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(q.get(), 3, transcript.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_double(q.get(), 4, static_cast<double>(pron_overall_0_100));
+    sqlite3_bind_double(q.get(), 5, static_cast<double>(intonation_overall_0_100));
+    sqlite3_bind_text(q.get(), 6, per_phoneme_json.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_int64(q.get(), 7, now_epoch_seconds());
+    step_done(db_, q.get(), "pron.record");
+#endif
+}
+
+void LearningStore::touch_phoneme_mastery(
+    const std::vector<std::pair<std::string, float>>& scored) {
+#ifndef HECQUIN_WITH_SQLITE
+    (void)scored;
+#else
+    if (!db_ || scored.empty()) return;
+    const int64_t now = now_epoch_seconds();
+
+    Transaction tx(db_);
+    if (!tx.active()) return;
+
+    for (const auto& [ipa, score] : scored) {
+        if (ipa.empty()) continue;
+        auto q = prepare_or_log(db_,
+            "INSERT INTO phoneme_mastery (ipa, attempts, avg_score, last_seen_at) "
+            "VALUES (?, 1, ?, ?) "
+            "ON CONFLICT(ipa) DO UPDATE SET "
+            "  avg_score = (avg_score * attempts + excluded.avg_score) / (attempts + 1), "
+            "  attempts = attempts + 1, "
+            "  last_seen_at = excluded.last_seen_at;",
+            "phoneme.touch");
+        if (!q) return;
+        sqlite3_bind_text(q.get(), 1, ipa.c_str(), -1, SQLITE_TRANSIENT);
+        sqlite3_bind_double(q.get(), 2, static_cast<double>(score));
+        sqlite3_bind_int64(q.get(), 3, now);
+        if (!step_done(db_, q.get(), "phoneme.touch")) return;
+    }
+    tx.commit();
+#endif
+}
+
+std::vector<std::string> LearningStore::sample_drill_sentences(int limit) const {
+    std::vector<std::string> out;
+#ifndef HECQUIN_WITH_SQLITE
+    (void)limit;
+    return out;
+#else
+    if (!db_ || limit <= 0) return out;
+    auto q = prepare_or_log(db_,
+        "SELECT body FROM documents WHERE kind = 'drill' "
+        "ORDER BY RANDOM() LIMIT ?;",
+        "drill.sample");
+    if (!q) return out;
+    sqlite3_bind_int(q.get(), 1, limit);
+    while (sqlite3_step(q.get()) == SQLITE_ROW) {
+        const unsigned char* t = sqlite3_column_text(q.get(), 0);
+        if (t) out.emplace_back(reinterpret_cast<const char*>(t));
+    }
+    return out;
 #endif
 }
 

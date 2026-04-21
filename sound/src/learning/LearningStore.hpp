@@ -76,6 +76,24 @@ public:
     /** Bump the `last_seen_at` and auto-create rows for each word token. */
     void touch_vocab(const std::vector<std::string>& words);
 
+    /**
+     * Append one pronunciation-drill attempt.  `per_phoneme_json` is the raw
+     * JSON document produced by `PronunciationDrillProcessor` — we keep it
+     * opaque at the store level so the schema survives scoring-code evolution.
+     */
+    void record_pronunciation_attempt(int64_t session_id,
+                                      const std::string& reference,
+                                      const std::string& transcript,
+                                      float pron_overall_0_100,
+                                      float intonation_overall_0_100,
+                                      const std::string& per_phoneme_json);
+
+    /** Update the phoneme-mastery roll-up table for a batch of observed phonemes. */
+    void touch_phoneme_mastery(const std::vector<std::pair<std::string, float>>& scored);
+
+    /** Read up to `limit` example drill sentences stored in documents(kind='drill'). */
+    std::vector<std::string> sample_drill_sentences(int limit) const;
+
     const std::string& db_path() const { return db_path_; }
     int embedding_dim() const { return embedding_dim_; }
 
