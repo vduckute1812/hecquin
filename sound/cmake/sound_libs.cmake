@@ -75,13 +75,13 @@ endif ()
 # Vector store, ingestion, RAG retrieval, english tutor processor.
 if (HECQUIN_HAS_SQLITE AND NOT TARGET hecquin_learning)
     add_library(hecquin_learning STATIC
-        ${HECQUIN_SOUND_SRC_ROOT}/learning/LearningStore.cpp
-        ${HECQUIN_SOUND_SRC_ROOT}/learning/LearningStoreMigrations.cpp
-        ${HECQUIN_SOUND_SRC_ROOT}/learning/LearningStoreDocuments.cpp
-        ${HECQUIN_SOUND_SRC_ROOT}/learning/LearningStoreVectorSearch.cpp
-        ${HECQUIN_SOUND_SRC_ROOT}/learning/LearningStoreSessions.cpp
-        ${HECQUIN_SOUND_SRC_ROOT}/learning/LearningStorePronunciation.cpp
-        ${HECQUIN_SOUND_SRC_ROOT}/learning/LearningStoreApiCalls.cpp
+        ${HECQUIN_SOUND_SRC_ROOT}/learning/store/LearningStore.cpp
+        ${HECQUIN_SOUND_SRC_ROOT}/learning/store/LearningStoreMigrations.cpp
+        ${HECQUIN_SOUND_SRC_ROOT}/learning/store/LearningStoreDocuments.cpp
+        ${HECQUIN_SOUND_SRC_ROOT}/learning/store/LearningStoreVectorSearch.cpp
+        ${HECQUIN_SOUND_SRC_ROOT}/learning/store/LearningStoreSessions.cpp
+        ${HECQUIN_SOUND_SRC_ROOT}/learning/store/LearningStorePronunciation.cpp
+        ${HECQUIN_SOUND_SRC_ROOT}/learning/store/LearningStoreApiCalls.cpp
         ${HECQUIN_SOUND_SRC_ROOT}/learning/EmbeddingClient.cpp
         ${HECQUIN_SOUND_SRC_ROOT}/learning/Ingestor.cpp
         ${HECQUIN_SOUND_SRC_ROOT}/learning/TextChunker.cpp

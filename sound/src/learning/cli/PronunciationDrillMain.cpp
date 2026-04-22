@@ -1,5 +1,5 @@
 #include "ai/CommandProcessor.hpp"
-#include "learning/LearningStore.hpp"
+#include "learning/store/LearningStore.hpp"
 #include "learning/ProgressTracker.hpp"
 #include "learning/PronunciationDrillProcessor.hpp"
 #include "voice/VoiceApp.hpp"

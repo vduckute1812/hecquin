@@ -1,7 +1,7 @@
 #include "learning/PronunciationDrillProcessor.hpp"
 
 #include "actions/PronunciationFeedbackAction.hpp"
-#include "learning/LearningStore.hpp"
+#include "learning/store/LearningStore.hpp"
 #include "learning/ProgressTracker.hpp"
 #include "tts/PiperSpeech.hpp"
 

@@ -10,12 +10,12 @@
 //   * LearningStorePronunciation.cpp — pronunciation_attempts + phoneme_mastery
 //   * LearningStoreApiCalls.cpp      — api_calls log (written by the C++ decorator)
 //
-// All files share `internal/SqliteHelpers.hpp` for the RAII glue.
+// All files share `store/internal/SqliteHelpers.hpp` for the RAII glue.
 
-#include "learning/LearningStore.hpp"
+#include "learning/store/LearningStore.hpp"
 
 #ifdef HECQUIN_WITH_SQLITE
-#include "learning/internal/SqliteHelpers.hpp"
+#include "learning/store/internal/SqliteHelpers.hpp"
 #include <sqlite3.h>
 #endif
 

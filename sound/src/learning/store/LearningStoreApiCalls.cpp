@@ -5,10 +5,10 @@
 // `ai` library decoupled from `learning`). Read by the Python dashboard to
 // chart daily traffic, latency, and error rates.
 
-#include "learning/LearningStore.hpp"
+#include "learning/store/LearningStore.hpp"
 
 #ifdef HECQUIN_WITH_SQLITE
-#include "learning/internal/SqliteHelpers.hpp"
+#include "learning/store/internal/SqliteHelpers.hpp"
 #include <sqlite3.h>
 #endif
 

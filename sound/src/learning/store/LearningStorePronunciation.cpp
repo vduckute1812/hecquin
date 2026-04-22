@@ -4,10 +4,10 @@
 // per-phoneme JSON are stored opaquely so the schema can outlive tweaks to
 // the scoring code. `phoneme_mastery` is a rolling average keyed by IPA.
 
-#include "learning/LearningStore.hpp"
+#include "learning/store/LearningStore.hpp"
 
 #ifdef HECQUIN_WITH_SQLITE
-#include "learning/internal/SqliteHelpers.hpp"
+#include "learning/store/internal/SqliteHelpers.hpp"
 #include <sqlite3.h>
 #endif
 

@@ -4,7 +4,7 @@
 // `run_migrations_()` can be called on every `open()` and new tables added to
 // `kSchemaVersion` simply appear on the next launch.
 
-#include "learning/LearningStore.hpp"
+#include "learning/store/LearningStore.hpp"
 
 #ifdef HECQUIN_WITH_SQLITE
 #include <sqlite3.h>

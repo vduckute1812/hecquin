@@ -1,6 +1,6 @@
 #pragma once
 
-#include "learning/LearningStore.hpp"
+#include "learning/store/LearningStore.hpp"
 
 #include <string>
 #include <vector>

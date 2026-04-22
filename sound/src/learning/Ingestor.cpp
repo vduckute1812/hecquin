@@ -1,7 +1,7 @@
 #include "learning/Ingestor.hpp"
 
 #include "learning/EmbeddingClient.hpp"
-#include "learning/LearningStore.hpp"
+#include "learning/store/LearningStore.hpp"
 #include "learning/TextChunker.hpp"
 
 #include <algorithm>

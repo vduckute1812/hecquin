@@ -3,7 +3,7 @@
 #include "ai/LoggingHttpClient.hpp"
 #include "learning/EmbeddingClient.hpp"
 #include "learning/EnglishTutorProcessor.hpp"
-#include "learning/LearningStore.hpp"
+#include "learning/store/LearningStore.hpp"
 #include "learning/ProgressTracker.hpp"
 #include "learning/RetrievalService.hpp"
 #include "voice/VoiceApp.hpp"

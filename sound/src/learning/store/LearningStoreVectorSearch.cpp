@@ -5,10 +5,10 @@
 //   * BLOB fallback — a full scan with cosine distance, used when the build
 //     lacks sqlite-vec. Keeps the pipeline working at small corpus sizes.
 
-#include "learning/LearningStore.hpp"
+#include "learning/store/LearningStore.hpp"
 
 #ifdef HECQUIN_WITH_SQLITE
-#include "learning/internal/SqliteHelpers.hpp"
+#include "learning/store/internal/SqliteHelpers.hpp"
 #include <sqlite3.h>
 
 #include <algorithm>

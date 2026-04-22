@@ -5,7 +5,7 @@
 #include "ai/OpenAiChatContent.hpp"
 #include "common/StringUtils.hpp"
 #include "learning/EmbeddingClient.hpp"
-#include "learning/LearningStore.hpp"
+#include "learning/store/LearningStore.hpp"
 #include "learning/ProgressTracker.hpp"
 #include "learning/RetrievalService.hpp"
 

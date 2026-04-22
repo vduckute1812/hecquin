@@ -3,7 +3,7 @@
 #include "config/AppConfig.hpp"
 #include "learning/EmbeddingClient.hpp"
 #include "learning/Ingestor.hpp"
-#include "learning/LearningStore.hpp"
+#include "learning/store/LearningStore.hpp"
 
 #include <charconv>
 #include <iostream>

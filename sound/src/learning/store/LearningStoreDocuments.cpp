@@ -4,10 +4,10 @@
 // `vec_documents`, and `ingested_files` tables — the ingestion and retrieval
 // surface of the learning library.
 
-#include "learning/LearningStore.hpp"
+#include "learning/store/LearningStore.hpp"
 
 #ifdef HECQUIN_WITH_SQLITE
-#include "learning/internal/SqliteHelpers.hpp"
+#include "learning/store/internal/SqliteHelpers.hpp"
 #include <sqlite3.h>
 #include <iostream>
 #endif

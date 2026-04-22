@@ -74,15 +74,16 @@ src/
 ├── common/
 │   └── StringUtils.hpp           — header-only trim/lower/starts_with
 ├── learning/
-│   ├── LearningStore.hpp                  — Public API (one class)
-│   ├── LearningStore.cpp                  — lifecycle + metadata (open/close, kv)
-│   ├── LearningStoreMigrations.cpp        — all DDL (schema v2)
-│   ├── LearningStoreDocuments.cpp         — documents + ingested_files + drill pool
-│   ├── LearningStoreVectorSearch.cpp      — query_top_k (vec0 + BLOB fallback)
-│   ├── LearningStoreSessions.cpp          — sessions + interactions + vocab
-│   ├── LearningStorePronunciation.cpp     — pronunciation_attempts + phoneme_mastery
-│   ├── LearningStoreApiCalls.cpp          — api_calls (written by LoggingHttpClient)
-│   ├── internal/SqliteHelpers.hpp         — private RAII glue (StmtGuard, Transaction, prepare_or_log, …)
+│   ├── store/                             — SQLite-backed persistence (one class, split impl)
+│   │   ├── LearningStore.hpp              — Public API (one class)
+│   │   ├── LearningStore.cpp              — lifecycle + metadata (open/close, kv)
+│   │   ├── LearningStoreMigrations.cpp    — all DDL (schema v2)
+│   │   ├── LearningStoreDocuments.cpp     — documents + ingested_files + drill pool
+│   │   ├── LearningStoreVectorSearch.cpp  — query_top_k (vec0 + BLOB fallback)
+│   │   ├── LearningStoreSessions.cpp      — sessions + interactions + vocab
+│   │   ├── LearningStorePronunciation.cpp — pronunciation_attempts + phoneme_mastery
+│   │   ├── LearningStoreApiCalls.cpp      — api_calls (written by LoggingHttpClient)
+│   │   └── internal/SqliteHelpers.hpp     — private RAII glue (StmtGuard, Transaction, prepare_or_log, …)
 │   ├── EmbeddingClient.hpp/cpp   — Gemini embeddings (OpenAI-compat, batched)
 │   ├── Ingestor.hpp/cpp          — curriculum → chunks → embeddings
 │   ├── TextChunker.hpp/cpp       — standalone chunking utility
@@ -403,22 +404,22 @@ GrammarCorrectionAction.to_reply() → TTS
 `LearningStore::kSchemaVersion == 2`. All migrations are idempotent
 (`CREATE … IF NOT EXISTS`), stamped into `kv_metadata(schema_version)` on the
 very first open and never downgraded afterwards. The table cluster is written
-by different `LearningStore*.cpp` translation units but they all share the
+by different translation units under `src/learning/store/` — all sharing the
 same class and DB file.
 
-| Table                     | Written by                          | Columns                                                   |
-|---------------------------|-------------------------------------|-----------------------------------------------------------|
-| `kv_metadata`             | `LearningStore.cpp`                 | `key PRIMARY KEY, value` (schema_version, embedding_dim)  |
-| `documents`               | `LearningStoreDocuments.cpp`        | `id, source, kind, title, body, metadata_json, created_at` |
-| `vec_documents`           | `LearningStoreDocuments.cpp`        | `USING vec0(embedding FLOAT[768])` (or BLOB fallback)     |
-| `ingested_files`          | `LearningStoreDocuments.cpp`        | `path PRIMARY KEY, hash, ingested_at`                     |
-| `sessions`                | `LearningStoreSessions.cpp`         | `id, mode, started_at, ended_at`                          |
-| `interactions`            | `LearningStoreSessions.cpp`         | `id, session_id, user_text, corrected_text, grammar_notes, created_at` |
-| `vocab_progress`          | `LearningStoreSessions.cpp`         | `word PRIMARY KEY, first_seen_at, last_seen_at, seen_count, mastery` |
-| `pronunciation_attempts`  | `LearningStorePronunciation.cpp`    | `id, session_id, reference, transcript, pron_overall, intonation_overall, per_phoneme_json, created_at` |
-| `phoneme_mastery`         | `LearningStorePronunciation.cpp`    | `ipa PRIMARY KEY, attempts, avg_score, last_seen_at`      |
-| `api_calls` **(v2)**      | `LearningStoreApiCalls.cpp` (via `LoggingHttpClient` sink) | `id, ts, provider, endpoint, method, status, latency_ms, request_bytes, response_bytes, ok, error` |
-| `request_logs` **(v2)**   | Python `dashboard/` middleware      | `id, ts, path, method, status, latency_ms, remote_ip, user_agent` |
+| Table                     | Written by (`src/learning/store/…`)                              | Columns                                                   |
+|---------------------------|------------------------------------------------------------------|-----------------------------------------------------------|
+| `kv_metadata`             | `LearningStore.cpp`                                              | `key PRIMARY KEY, value` (schema_version, embedding_dim)  |
+| `documents`               | `LearningStoreDocuments.cpp`                                     | `id, source, kind, title, body, metadata_json, created_at` |
+| `vec_documents`           | `LearningStoreDocuments.cpp`                                     | `USING vec0(embedding FLOAT[768])` (or BLOB fallback)     |
+| `ingested_files`          | `LearningStoreDocuments.cpp`                                     | `path PRIMARY KEY, hash, ingested_at`                     |
+| `sessions`                | `LearningStoreSessions.cpp`                                      | `id, mode, started_at, ended_at`                          |
+| `interactions`            | `LearningStoreSessions.cpp`                                      | `id, session_id, user_text, corrected_text, grammar_notes, created_at` |
+| `vocab_progress`          | `LearningStoreSessions.cpp`                                      | `word PRIMARY KEY, first_seen_at, last_seen_at, seen_count, mastery` |
+| `pronunciation_attempts`  | `LearningStorePronunciation.cpp`                                 | `id, session_id, reference, transcript, pron_overall, intonation_overall, per_phoneme_json, created_at` |
+| `phoneme_mastery`         | `LearningStorePronunciation.cpp`                                 | `ipa PRIMARY KEY, attempts, avg_score, last_seen_at`      |
+| `api_calls` **(v2)**      | `LearningStoreApiCalls.cpp` (via `LoggingHttpClient` sink)       | `id, ts, provider, endpoint, method, status, latency_ms, request_bytes, response_bytes, ok, error` |
+| `request_logs` **(v2)**   | Python `dashboard/` middleware                                   | `id, ts, path, method, status, latency_ms, remote_ip, user_agent` |
 
 Indexes on `api_calls(ts)`, `api_calls(provider, ts)`, and `request_logs(ts)`
 keep the dashboard's per-day aggregations cheap.
