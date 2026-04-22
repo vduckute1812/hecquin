@@ -1,5 +1,10 @@
 # Hecquin Sound Module — Architecture & Logic
 
+> This document is the **developer / maintainer guide** — source layout, component internals,
+> data-flow diagrams, SQLite schema, threading model, and CMake internals.
+> For **setup, CLI usage, configuration keys, and troubleshooting**, see
+> [`README.md`](./README.md).
+
 ## Overview
 
 The Hecquin Sound Module is a cross-platform audio processing subsystem for the Robot Tutor project. It provides four core capabilities:
@@ -61,6 +66,7 @@ src/
 ├── ai/
 │   ├── IHttpClient.hpp           — abstract HTTP transport (testable)
 │   ├── HttpClient.hpp/cpp        — libcurl `http_post_json` + `CurlHttpClient`
+│   ├── LoggingHttpClient.hpp/cpp — decorator: IHttpClient → ApiCallSink telemetry
 │   ├── LocalIntentMatcher.hpp/cpp— regex-based local intents
 │   ├── ChatClient.hpp/cpp        — remote LLM client (IHttpClient injected)
 │   ├── CommandProcessor.hpp/cpp  — façade: matcher + chat
@@ -68,7 +74,15 @@ src/
 ├── common/
 │   └── StringUtils.hpp           — header-only trim/lower/starts_with
 ├── learning/
-│   ├── LearningStore.hpp/cpp     — SQLite + sqlite-vec store (docs, sessions, interactions, vocab, pronunciation_attempts, phoneme_mastery)
+│   ├── LearningStore.hpp                  — Public API (one class)
+│   ├── LearningStore.cpp                  — lifecycle + metadata (open/close, kv)
+│   ├── LearningStoreMigrations.cpp        — all DDL (schema v2)
+│   ├── LearningStoreDocuments.cpp         — documents + ingested_files + drill pool
+│   ├── LearningStoreVectorSearch.cpp      — query_top_k (vec0 + BLOB fallback)
+│   ├── LearningStoreSessions.cpp          — sessions + interactions + vocab
+│   ├── LearningStorePronunciation.cpp     — pronunciation_attempts + phoneme_mastery
+│   ├── LearningStoreApiCalls.cpp          — api_calls (written by LoggingHttpClient)
+│   ├── internal/SqliteHelpers.hpp         — private RAII glue (StmtGuard, Transaction, prepare_or_log, …)
 │   ├── EmbeddingClient.hpp/cpp   — Gemini embeddings (OpenAI-compat, batched)
 │   ├── Ingestor.hpp/cpp          — curriculum → chunks → embeddings
 │   ├── TextChunker.hpp/cpp       — standalone chunking utility
@@ -189,6 +203,34 @@ Guarded by `#ifdef HECQUIN_WITH_CURL`; `post_json` returns `std::nullopt`
 unconditionally when curl is absent. Tests provide a lightweight `FakeHttp`
 implementing the same interface — no sockets are opened.
 
+### LoggingHttpClient
+
+A thin **Decorator** over `IHttpClient` (`src/ai/LoggingHttpClient.{hpp,cpp}`)
+that captures outbound-call telemetry without touching any call site. It
+owns an inner `IHttpClient&` and a `std::function<void(ApiCallRecord)>` sink;
+`post_json` forwards to the inner transport, measures wall-clock latency,
+records request/response byte counts, and emits one `ApiCallRecord` per call.
+
+```
+ChatClient / EmbeddingClient
+        │   uses (IHttpClient&)
+        ▼
+LoggingHttpClient
+   ├── delegates ─► CurlHttpClient (libcurl)
+   └── sink(ApiCallRecord) ─► LearningStore::record_api_call  [bound in main()]
+```
+
+The sink indirection is deliberate: the `ai` library must not depend on
+`learning` (that would create a cycle), so the binding happens at the
+executable entry points (`EnglishTutorMain.cpp`, `EnglishIngest.cpp`).
+Executables that don't want telemetry (or tests that inject a `FakeHttp`)
+simply skip the decorator or pass a no-op sink; everything else keeps its
+existing contract.
+
+Rows land in the `api_calls` table (see schema below) and are read
+(read-only, via SQLite WAL) by the sibling **`dashboard/`** Python / FastAPI
+module to render daily traffic, latency, and error-rate charts.
+
 ### OpenAiChatContent
 
 `extract_openai_chat_assistant_content(body)` parses an OpenAI-compatible chat
@@ -308,38 +350,9 @@ Key preprocessor defines set by CMake:
 | Raspberry Pi (aarch64/armv7l) | `.env/rpi/`, `build/rpi/` |
 | Linux x86_64 | `.env/linux/`, `build/linux/` |
 
-Whisper/Piper models are shared across platforms in `.env/shared/models/`.
-
----
-
-## Default Model Paths
-
-| Resource | Default path |
-|---|---|
-| Whisper model | `.env/shared/models/ggml-base.bin` |
-| Piper voice model | `.env/shared/models/piper/en_US-lessac-medium.onnx` |
-| Config | `.env/config.env` |
-| System prompt | `.env/prompts/system_prompt.txt` |
-
----
-
-## Development Workflow
-
-`dev.sh` provides unified commands:
-
-```
-./dev.sh install:all            # full setup: deps → whisper → piper → models → cmake build
-./dev.sh build                  # cmake configure + build
-./dev.sh run voice_detector
-./dev.sh run text_to_speech "hello world"
-./dev.sh speak "hello"          # shorthand for TTS playback
-./dev.sh curriculum:fetch       # download public English-learning datasets
-./dev.sh learning:ingest        # chunk → embed → insert into SQLite vector DB
-./dev.sh english:tutor          # launch lesson-mode voice loop
-./dev.sh pronunciation:install  # download wav2vec2 phoneme model + vocab (+ prebuilt onnxruntime when no package manager)
-./dev.sh pronunciation:drill    # launch drill-mode voice loop
-./dev.sh env:clean              # wipe platform build outputs
-```
+Whisper/Piper models are shared across platforms in `.env/shared/models/`. Default model
+paths (Whisper GGML, Piper voice, config file, system prompt) and the `dev.sh` command
+cheat sheet are documented in [`README.md`](./README.md).
 
 ---
 
@@ -385,20 +398,66 @@ EnglishTutorProcessor.process
 GrammarCorrectionAction.to_reply() → TTS
 ```
 
-### SQLite schema (learning DB)
+### SQLite schema (learning DB, v2)
 
-| Table             | Notes                                                   |
-|-------------------|---------------------------------------------------------|
-| `documents`       | `id, source, kind, title, body, metadata_json, created_at` |
-| `vec_documents`   | `USING vec0(embedding FLOAT[768])` (or BLOB fallback)   |
-| `ingested_files`  | `path PRIMARY KEY, hash, ingested_at` — skip unchanged  |
-| `sessions`        | `id, mode, started_at, ended_at`                        |
-| `interactions`    | `id, session_id, user_text, corrected_text, grammar_notes, created_at` |
-| `vocab_progress`  | `word PRIMARY KEY, first_seen_at, last_seen_at, seen_count, mastery` |
+`LearningStore::kSchemaVersion == 2`. All migrations are idempotent
+(`CREATE … IF NOT EXISTS`), stamped into `kv_metadata(schema_version)` on the
+very first open and never downgraded afterwards. The table cluster is written
+by different `LearningStore*.cpp` translation units but they all share the
+same class and DB file.
+
+| Table                     | Written by                          | Columns                                                   |
+|---------------------------|-------------------------------------|-----------------------------------------------------------|
+| `kv_metadata`             | `LearningStore.cpp`                 | `key PRIMARY KEY, value` (schema_version, embedding_dim)  |
+| `documents`               | `LearningStoreDocuments.cpp`        | `id, source, kind, title, body, metadata_json, created_at` |
+| `vec_documents`           | `LearningStoreDocuments.cpp`        | `USING vec0(embedding FLOAT[768])` (or BLOB fallback)     |
+| `ingested_files`          | `LearningStoreDocuments.cpp`        | `path PRIMARY KEY, hash, ingested_at`                     |
+| `sessions`                | `LearningStoreSessions.cpp`         | `id, mode, started_at, ended_at`                          |
+| `interactions`            | `LearningStoreSessions.cpp`         | `id, session_id, user_text, corrected_text, grammar_notes, created_at` |
+| `vocab_progress`          | `LearningStoreSessions.cpp`         | `word PRIMARY KEY, first_seen_at, last_seen_at, seen_count, mastery` |
+| `pronunciation_attempts`  | `LearningStorePronunciation.cpp`    | `id, session_id, reference, transcript, pron_overall, intonation_overall, per_phoneme_json, created_at` |
+| `phoneme_mastery`         | `LearningStorePronunciation.cpp`    | `ipa PRIMARY KEY, attempts, avg_score, last_seen_at`      |
+| `api_calls` **(v2)**      | `LearningStoreApiCalls.cpp` (via `LoggingHttpClient` sink) | `id, ts, provider, endpoint, method, status, latency_ms, request_bytes, response_bytes, ok, error` |
+| `request_logs` **(v2)**   | Python `dashboard/` middleware      | `id, ts, path, method, status, latency_ms, remote_ip, user_agent` |
+
+Indexes on `api_calls(ts)`, `api_calls(provider, ts)`, and `request_logs(ts)`
+keep the dashboard's per-day aggregations cheap.
 
 If `sqlite-vec` cannot be downloaded at configure time, `LearningStore` transparently
 falls back to a BLOB-backed table and a C++ brute-force cosine scan — the rest of the
 pipeline works unchanged (just slower on large curricula).
+
+### API-call telemetry pipeline (v2)
+
+```
+EnglishTutorMain / EnglishIngest
+    │
+    ├── construct CurlHttpClient                                (transport)
+    ├── construct ApiCallSink = &LearningStore::record_api_call (binding site)
+    ├── construct LoggingHttpClient(inner, sink, provider="chat" | "embedding")
+    │
+    ▼
+ChatClient / EmbeddingClient  (take IHttpClient& — unchanged)
+    │
+    ▼
+LoggingHttpClient::post_json
+    │
+    ├── now()                                       → t0
+    ├── inner_.post_json(url, headers, body)        → {status, response}
+    ├── now() − t0                                  → latency_ms
+    ├── sink_(ApiCallRecord{provider, url, …})
+    ▼
+LearningStoreApiCalls.cpp → INSERT INTO api_calls …  (SQLite WAL mode)
+    │
+    ▼  [read-only, via WAL]
+dashboard/ (FastAPI + SQLite)  → charts, daily aggregates, error-rate panels
+```
+
+Because every cross-library edge is a reference / callback / plain SQL write,
+the `ai` library never includes anything from `learning`, and `learning` never
+includes anything from `ai` — the dependency graph remains acyclic, and the
+decorator can be omitted entirely in test builds or on voice-only executables
+that don't care about telemetry.
 
 ### Ingest pipeline
 
@@ -491,13 +550,11 @@ announcement. After `VoiceListener` speaks the feedback, it invokes the queued
 
 ### Progress schema additions
 
-`LearningStore` grows two tables (guarded by the same SQLite migrations as the
-English-tutor tables):
-
-| Table                     | Columns                                                    |
-|---------------------------|------------------------------------------------------------|
-| `pronunciation_attempts`  | `id, session_id, reference_text, user_transcript, overall_0_100, intonation_0_100, lowest_word, lowest_phoneme, words_json, phonemes_json, issues_json, created_at` |
-| `phoneme_mastery`         | `ipa PRIMARY KEY, attempts, avg_score, last_seen_at` |
+The drill writes to `pronunciation_attempts` and `phoneme_mastery` — both now
+part of the shared v2 schema (see **English Tutor Subsystem → SQLite schema
+(learning DB, v2)** for the exhaustive column list). Implementation lives in
+`LearningStorePronunciation.cpp`, so adding a new column only touches that one
+translation unit and `LearningStoreMigrations.cpp`.
 
 `ProgressTracker::log_pronunciation()` writes both tables atomically in one
 transaction so per-phoneme mastery stays consistent with the raw attempts log.
@@ -512,14 +569,9 @@ compiled as a no-op stub, `load()` returns false, and
 `PronunciationDrillProcessor` reports "pronunciation scoring unavailable" in
 TTS while still exercising the intonation path (which has no external deps).
 
-### Configuration additions (`.env/config.env`)
+### Configuration
 
-| Key                              | Meaning                                                        |
-|----------------------------------|----------------------------------------------------------------|
-| `HECQUIN_DRILL_START_PHRASES`    | `\|`-separated regex triggers that enter `ListenerMode::Drill` |
-| `HECQUIN_DRILL_END_PHRASES`      | `\|`-separated regex triggers that leave drill mode            |
-| `HECQUIN_DRILL_PASS_THRESHOLD`   | Overall score (0..100) counted as a "pass"                     |
-| `HECQUIN_DRILL_SENTENCES`        | Optional newline-delimited sentence pool                       |
-| `HECQUIN_PRONUNCIATION_MODEL`    | Path to the wav2vec2 phoneme-CTC ONNX model                    |
-| `HECQUIN_PRONUNCIATION_VOCAB`    | Path to the HuggingFace-style `vocab.json`                     |
-| `HECQUIN_ONNX_PROVIDER`          | onnxruntime execution provider (`cpu` / `coreml` / `cuda`)     |
+All `HECQUIN_DRILL_*`, `HECQUIN_PRONUNCIATION_*`, and `HECQUIN_ONNX_PROVIDER` keys
+are documented in [`README.md → English Tutor Mode → Configuration knobs`](./README.md#configuration-knobs-envconfigenv).
+`PronunciationDrillProcessor` reads these through `AppConfig` at startup — no runtime
+reconfiguration.

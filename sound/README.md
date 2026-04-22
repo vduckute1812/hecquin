@@ -2,6 +2,10 @@
 
 A cross-platform audio processing module for the Robot Tutor project, providing speech recognition (voice-to-text) and speech synthesis (text-to-speech) capabilities.
 
+> This README is the **user guide** — setup, commands, configuration keys, and troubleshooting.
+> For the internal **source layout, component details, data-flow diagrams, SQLite schema,
+> threading model, and CMake internals**, see [`ARCHITECTURE.md`](./ARCHITECTURE.md).
+
 ## Overview
 
 The sound module consists of several executables plus a small **AI / command routing** library used by the voice detector:
@@ -27,102 +31,26 @@ Both audio programs use [SDL2](https://www.libsdl.org/) for cross-platform audio
 | Linux (x86_64)                | Development | ✅      |
 
 
-## Project Structure
+## Project Layout (high-level)
 
 ```
 sound/
-├── CMakeLists.txt           # Main CMake configuration
-├── dev.sh                   # Development automation script
-├── src/                     # C++ sources (include root: `#include "voice/…"`, `ai/…`, `actions/…`, etc.)
-│   ├── voice/               # Capture, Whisper, VAD listen loop, `main`
-│   │   ├── VoiceDetector.cpp
-│   │   ├── VoiceListener.cpp
-│   │   ├── VoiceListener.hpp
-│   │   ├── AudioCapture.cpp
-│   │   ├── AudioCapture.hpp
-│   │   ├── WhisperEngine.cpp
-│   │   └── WhisperEngine.hpp
-│   │   ├── VoiceApp.cpp          # Shared bootstrap (config + whisper + capture)
-│   │   └── VoiceApp.hpp
-│   ├── config/              # Env / defaults (`ConfigStore`, `AppConfig`, …)
-│   │   └── ai/              # `AiClientConfig` (API keys, model, base URL)
-│   ├── actions/             # Routed intents → `Action` (`Action.hpp`, `*Action.hpp`, …)
-│   ├── ai/                  # HTTP client + intent matcher + chat + command facade
-│   │   ├── IHttpClient.hpp        # Abstract HTTP (testable)
-│   │   ├── HttpClient.hpp/.cpp    # libcurl `http_post_json` + `CurlHttpClient`
-│   │   ├── OpenAiChatContent.*    # nlohmann/json response extractor
-│   │   ├── LocalIntentMatcher.*   # Regex-based local intents
-│   │   ├── ChatClient.*           # Remote LLM client (IHttpClient injected)
-│   │   └── CommandProcessor.*     # Facade composing matcher + chat
-│   ├── common/              # Header-only utilities
-│   │   └── StringUtils.hpp        # `trim_copy`, `to_lower_copy`, `starts_with`
-│   ├── learning/            # Vector DB, ingestion, RAG, tutor processor
-│   │   ├── LearningStore.*        # SQLite + sqlite-vec store
-│   │   ├── EmbeddingClient.*      # Gemini embeddings (OpenAI-compat, batched)
-│   │   ├── Ingestor.*             # Curriculum → chunks → embeddings
-│   │   ├── TextChunker.*          # Standalone chunking utility
-│   │   ├── RetrievalService.*     # Vector search helpers
-│   │   ├── ProgressTracker.*      # Per-user learning log
-│   │   ├── EnglishTutorProcessor.*# RAG + grammar correction
-│   │   └── cli/                   # `english_ingest`, `english_tutor`
-│   ├── tts/                 # Piper + SDL playback (static lib)
-│   │   ├── PiperSpeech.cpp
-│   │   └── PiperSpeech.hpp
-│   └── cli/                 # Standalone TTS executable entry
-│       └── TextToSpeech.cpp
-├── tests/                   # Unit tests (CMake + CTest)
-│   ├── test_openai_chat_content.cpp
-│   ├── test_local_intent_matcher.cpp
-│   ├── test_embedding_client_json.cpp
-│   ├── test_text_chunker.cpp
-│   ├── test_config_store.cpp
-│   ├── test_learning_store.cpp
-│   ├── test_phoneme_vocab.cpp       # Pronunciation — greedy IPA tokenizer
-│   ├── test_ctc_aligner.cpp         # Pronunciation — Viterbi on hand-crafted emissions
-│   ├── test_pronunciation_scorer.cpp# Pronunciation — logp → 0..100 + aggregation
-│   ├── test_pitch_tracker.cpp       # Prosody — YIN on synthetic sines
-│   └── test_intonation_scorer.cpp   # Prosody — DTW + final-direction rule
-├── cmake/
-│   ├── project_options.cmake      # Compiler flags (C++17)
-│   ├── adhoc_codesign.cmake       # macOS ad-hoc signing helper
-│   ├── deps_whisper.cmake         # Whisper discovery
-│   ├── deps_piper.cmake           # Piper TTS discovery
-│   ├── deps_sdl2.cmake            # SDL2 discovery
-│   ├── deps_curl.cmake            # libcurl (required for AI + embeddings)
-│   ├── deps_json.cmake            # Vendor nlohmann/json header
-│   ├── deps_sqlite_vec.cmake      # SQLite + sqlite-vec vector extension
-│   ├── dependency_libraries.cmake # Interface libraries
-│   ├── sound_libs.cmake           # Internal static libs (config/ai/voice/learning)
-│   ├── targets.cmake              # Aggregates executable targets
-│   ├── voice_to_text.cmake        # `voice_detector` executable
-│   ├── english_tutor.cmake        # `english_ingest` + `english_tutor` executables
-│   ├── text_to_speech.cmake       # `text_to_speech` executable
-│   ├── sound_tests.cmake          # CTest unit tests
-│   └── piper_speech.cmake         # Static lib `hecquin_piper_speech`
-├── scripts/
-│   ├── dev_project.sh          # Project build helpers
-│   ├── dev_whisper.sh          # Whisper setup helpers
-│   ├── dev_piper.sh            # Piper TTS setup helpers
-│   └── install_build_all.sh    # One-shot: system deps, whisper, piper, models, CMake build
-├── build/                   # Build output (per-platform)
-│   ├── linux/
-│   ├── mac/
-│   └── rpi/
-└── .env/                    # Local dependencies (not in git)
-    ├── config.env           # Runtime config (API keys, audio device, etc.)
-    ├── prompts/             # AI prompt files (editable without recompiling)
-    │   └── system_prompt.txt
-    ├── linux/               # Linux-specific installs
-    ├── mac/                 # macOS binaries
-    ├── rpi/                 # Raspberry Pi binaries
-    └── shared/              # Shared resources
-        ├── whisper.cpp/     # Whisper source
-        ├── piper/           # Piper source
-        └── models/          # AI models
-            ├── ggml-base.bin         # Whisper model
-            └── piper/
-                └── en_US-lessac-medium.onnx  # Piper voice
+├── CMakeLists.txt         # Main CMake configuration
+├── dev.sh                 # Development automation script (main entry point)
+├── src/                   # C++ sources — see ARCHITECTURE.md for the full tree
+├── tests/                 # CTest unit tests
+├── cmake/                 # Modular CMake files (one per dep / target)
+├── scripts/               # Shell helpers called by dev.sh
+├── build/{mac,rpi,linux}/ # Per-platform build output (git-ignored)
+└── .env/                  # Local dependencies + secrets (git-ignored)
+    ├── config.env         # Runtime config (API keys, audio device, …)
+    ├── prompts/           # AI prompt files (editable without recompiling)
+    ├── {mac,rpi,linux}/   # Per-platform installs (whisper, piper, onnxruntime)
+    └── shared/            # Shared resources (whisper.cpp, piper, models, curricula)
 ```
+
+For the full directory tree, component breakdown, and build-system internals see
+[`ARCHITECTURE.md`](./ARCHITECTURE.md).
 
 ## Quick Start
 
@@ -430,40 +358,9 @@ Download with: `./dev.sh piper:download-model <voice>`
 
 In addition to the default assistant, the sound module ships with an **English tutor**
 that corrects grammar in what you say, backed by a local SQLite + `sqlite-vec` vector
-database and Gemini embeddings for RAG.
-
-### Subsystem layout
-
-```
-sound/
-├── .env/shared/learning/
-│   ├── curriculum/         # public datasets (auto-fetched)
-│   │   ├── vocabulary/     # Oxford 3000/5000, NGSL, CEFR-J
-│   │   ├── grammar/        # Wikibooks "English in Use"
-│   │   ├── dictionary/     # WordNet-like glosses (JSONL)
-│   │   └── readers/        # Gutenberg graded readers
-│   ├── custom/             # drop your own PDF/MD/TXT here
-│   └── db/learning.sqlite  # vector + progress DB (git-ignored)
-└── src/learning/
-    ├── LearningStore.{hpp,cpp}          # SQLite + sqlite-vec migrations
-    ├── EmbeddingClient.{hpp,cpp}        # Gemini gemini-embedding-001 over HTTP
-    ├── Ingestor.{hpp,cpp}               # chunk/hash/upsert pipeline
-    ├── RetrievalService.{hpp,cpp}       # top-k cosine search
-    ├── ProgressTracker.{hpp,cpp}        # sessions / interactions / vocab
-    ├── EnglishTutorProcessor.{hpp,cpp}  # RAG → Gemini chat → GrammarCorrection
-    └── cli/{EnglishIngest,EnglishTutorMain}.cpp
-```
-
-### SQLite schema
-
-| Table             | Purpose                                                     |
-| ----------------- | ----------------------------------------------------------- |
-| `documents`       | Ingested text chunks (source, kind, title, body, metadata)  |
-| `vec_documents`   | `vec0` virtual table holding the 768-dim embedding          |
-| `ingested_files`  | `path → content_fingerprint` for skip-unchanged ingest      |
-| `sessions`        | One row per tutor run (mode, start/end)                     |
-| `interactions`    | Every utterance + tutor correction + short explanation      |
-| `vocab_progress`  | Per-word first/last seen timestamps + mastery counter       |
+database and Gemini embeddings for RAG. See
+[`ARCHITECTURE.md → English Tutor Subsystem`](./ARCHITECTURE.md#english-tutor-subsystem)
+for the runtime data flow, source layout, and SQLite schema.
 
 ### Workflow
 
@@ -486,23 +383,6 @@ cp ~/Downloads/my_grammar_notes.md sound/.env/shared/learning/custom/
 ./dev.sh english:tutor
 # Or from the default assistant, just say: "start english lesson"
 # To leave: "exit lesson"
-```
-
-### Runtime flow
-
-```
-voice → Whisper → CommandProcessor.match_local (toggle?)
-                        │
-                        ├── yes → flip mode / normal command
-                        └── no → in lesson mode?
-                                   │
-                                   ├── yes → RetrievalService.top_k (sqlite-vec)
-                                   │         → build system prompt + context
-                                   │         → Gemini /chat/completions
-                                   │         → parse "You said / Better / Reason"
-                                   │         → ProgressTracker.log_interaction
-                                   │
-                                   └── no → CommandProcessor external API
 ```
 
 ### Grammar correction reply shape
@@ -543,36 +423,26 @@ Reason: The past tense of "go" is the irregular form "went".
 - **libcurl** (same as the base bot) — required for the embeddings HTTP call.
 
 
+## API Call Telemetry
+
+Every outbound chat/embedding call is logged automatically: the
+`LoggingHttpClient` decorator wraps `CurlHttpClient` and writes one row per
+request into the `api_calls` SQLite table (latency, status, request/response
+bytes, error). No extra flag is required — when libcurl is available, telemetry
+is on. The sibling **`dashboard/`** module consumes this table (plus its own
+`request_logs`) to render daily traffic, latency, and error-rate charts over
+HTTPS; see [`../dashboard/README.md`](../dashboard/README.md) for setup, and
+[`ARCHITECTURE.md → API-call telemetry pipeline`](./ARCHITECTURE.md#api-call-telemetry-pipeline-v2)
+for the internal flow.
+
 ## Pronunciation & Intonation Drill
 
 The drill extends the listener with a third mode (`ListenerMode::Drill`) that
 scores *read-aloud* attempts against a known reference sentence — so we can
 provide concrete, local, per-phoneme feedback without any cloud call on the
-acoustic path.
-
-### Pipeline
-
-```
-reference sentence ──► Piper TTS ──► PCM + reference F0 contour
-                                            │
-user speech ──► Whisper (transcript)        │
-            └── raw 16 kHz PCM ─────────────┤
-                                            ▼
-                               PhonemeModel (wav2vec2 + onnxruntime)
-                                            │   log-softmax emissions
-                                            ▼
-G2P (espeak-ng --ipa=3)  ──► target phoneme ids ──► CtcAligner (Viterbi)
-                                            │
-                                            ▼
-                                  PronunciationScorer
-                                  (GOP → 0..100 per phoneme/word/overall)
-                                            │
-user + reference PCM ──► PitchTracker (YIN) ──► IntonationScorer (DTW)
-                                            │
-                                            ▼
-                           PronunciationFeedbackAction → TTS
-                           ProgressTracker.log_pronunciation → SQLite
-```
+acoustic path. See
+[`ARCHITECTURE.md → Pronunciation & Intonation Drill Subsystem`](./ARCHITECTURE.md#pronunciation--intonation-drill-subsystem)
+for the full scoring pipeline.
 
 ### Install the extra dependencies
 
@@ -606,16 +476,10 @@ compiles, but `PhonemeModel::load()` returns false and the drill reports
 
 The robot picks a random sentence from `HECQUIN_DRILL_SENTENCES` (falling back
 to a built-in English pool), speaks it via Piper, and waits for the learner to
-repeat it. Every attempt is stored in the `pronunciation_attempts` SQLite table
-and aggregated per-IPA in `phoneme_mastery` so future drills can target weak
-phonemes.
-
-### Progress schema additions
-
-| Table                     | Notes                                                        |
-|---------------------------|--------------------------------------------------------------|
-| `pronunciation_attempts`  | One row per drill attempt (reference text, transcript, overall + intonation scores, lowest-scoring word/phoneme, JSON blobs for per-word and per-phoneme detail) |
-| `phoneme_mastery`         | `ipa PRIMARY KEY, attempts, avg_score, last_seen_at` — for weak-phoneme recommendation |
+repeat it. Every attempt is stored in `pronunciation_attempts` and aggregated
+per-IPA in `phoneme_mastery` so future drills can target weak phonemes — see
+the v2 schema table in
+[`ARCHITECTURE.md`](./ARCHITECTURE.md#sqlite-schema-learning-db-v2).
 
 ## CMake Configuration
 
@@ -647,48 +511,6 @@ Override default paths with CMake variables:
 cmake .. \
   -DWHISPER_INSTALL_DIR=/path/to/whisper \
   -DDEFAULT_PIPER_MODEL_PATH=/path/to/voice.onnx
-```
-
-## Architecture
-
-### Voice Detector Flow
-
-```
-┌─────────────┐    ┌─────────────┐    ┌─────────────┐    ┌──────────────────┐
-│ Microphone  │───>│ SDL2 Audio  │───>│   Whisper   │───>│ CommandProcessor │
-│   Input     │    │   Capture   │    │ Transcribe  │    │ (regex + HTTP)   │
-└─────────────┘    └─────────────┘    └─────────────┘    └──────────────────┘
-                         │                   │                      │
-                         v                   v                      v
-                   Float32 PCM          Transcript            Action.reply
-                   16kHz Mono            (joined text)              │
-                                                                    v
-                        ┌──────────────────────────────────────────────┐
-                        │ Pause capture → Piper (WAV) → SDL playback   │
-                        │ 22050 Hz mono → speakers → resume capture    │
-                        └──────────────────────────────────────────────┘
-```
-
-Transcription runs on the thread that owns the listen loop; routing to the external API is started via **std::async** so work can proceed on a worker thread while SDL continues capturing in its audio callback. **TTS** uses a **second** SDL audio device (playback); capture is paused for the Piper + playback phase so playback is not fed straight back into Whisper.
-
-**C++ implementation notes:**
-
-- **WhisperEngine** owns the `whisper_context` with **`std::unique_ptr`** and a custom deleter so the model is always freed on teardown. Known Whisper noise tokens (`[BLANK_AUDIO]`, `[NO_SPEECH]`, `[ Inaudible Remark ]`, etc.) are filtered out so they never reach the AI API.
-- **CommandProcessor** is a thin façade composing a **`LocalIntentMatcher`** (regex-based fast-path) and a **`ChatClient`** (remote LLM). The chat client takes an **`IHttpClient`** by reference (default `CurlHttpClient`), so unit tests inject a fake transport. JSON bodies are built with **nlohmann/json**, and responses are parsed by the standalone `extract_openai_chat_assistant_content`.
-- The VAD loop polls **`AudioCapture::snapshotBuffer()`** each interval; when end-of-speech is detected, **that iteration’s snapshot** is passed to Whisper (no extra full-buffer copy on every poll while recording).
-- AI responses are sanitized for TTS (markdown stripped, whitespace normalized) before being sent to Piper.
-
-### Text-to-Speech Flow
-
-```
-┌─────────────┐    ┌─────────────┐    ┌─────────────┐
-│ Text Input  │───>│ Piper TTS   │───>│  SDL2 Audio │───> Speaker
-│             │    │ (subprocess)│    │   Playback  │
-└─────────────┘    └─────────────┘    └─────────────┘
-                         │                   │
-                         v                   v
-                   WAV File             Int16 PCM
-                   22050Hz              22050Hz Mono
 ```
 
 ## Troubleshooting
