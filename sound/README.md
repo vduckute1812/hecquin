@@ -305,24 +305,24 @@ Then run `./dev.sh run voice_detector` as usual. The same variables work if you 
 **Example console output (reply is spoken, not printed as `💬`):**
 
 ```
-Đang tải model Whisper...
+Loading Whisper model...
 Model loaded!
-Tìm thấy 1 thiết bị ghi âm:
+Found 1 recording device(s):
   [0] MacBook Pro Microphone
 Audio device: 16000Hz, 1 channels, format=33056
 
-🎤 Đang lắng nghe... (Nói bất kỳ lúc nào!)
-⏹ Ghi âm hoàn thành!
+🎤 Listening... (Speak anytime!)
+⏹ Recording complete!
 
-🔍 Đang nhận diện...
+🔍 Recognizing...
 
-📝 Kết quả:
+📝 Result:
   > Hello, how are you today?
 
 🤖 Route: ExternalApi
-🔊 Đang tổng hợp giọng nói...
+🔊 Synthesizing speech...
 📊 Loaded … samples (… s)
-🔊 Đang phát giọng nói...
+🔊 Playing speech...
 ```
 
 For a local phrase such as “turn on the air”, the route line shows `LocalDevice` and Piper speaks the short confirmation instead of calling the API. If Piper fails, an error is written to **stderr** and the reply text is included there for debugging.
@@ -709,7 +709,7 @@ whisper library not found. Run: ./dev.sh whisper:clone && ./dev.sh whisper:build
 ### Piper TTS not working
 
 ```
-Lỗi chạy Piper TTS (exit code: 127)
+Piper TTS failed (exit code: 127)
 ```
 
 **Solution:**
@@ -721,7 +721,7 @@ Lỗi chạy Piper TTS (exit code: 127)
 ### No audio input devices
 
 ```
-Tìm thấy 0 thiết bị ghi âm
+Found 0 recording device(s)
 ```
 
 **Solution:**
@@ -733,7 +733,7 @@ Tìm thấy 0 thiết bị ghi âm
 ### Model not found
 
 ```
-Model không tồn tại: .env/shared/models/ggml-base.bin
+Model not found: .env/shared/models/ggml-base.bin
 ```
 
 **Solution:** Download the model:

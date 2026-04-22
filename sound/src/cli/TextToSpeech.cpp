@@ -12,13 +12,13 @@
 constexpr const char* FALLBACK_TEXT = "Hello! I am your robot tutor. How can I help you today?";
 
 void print_usage(const char* program) {
-    std::cout << "Sử dụng: " << program << " [options] \"text to speak\"" << std::endl;
+    std::cout << "Usage: " << program << " [options] \"text to speak\"" << std::endl;
     std::cout << "Options:" << std::endl;
-    std::cout << "  -m, --model <path>   Đường dẫn tới model Piper (.onnx)" << std::endl;
-    std::cout << "  -o, --output <path>  Lưu audio ra file WAV (không phát)" << std::endl;
-    std::cout << "  -h, --help           Hiển thị trợ giúp" << std::endl;
+    std::cout << "  -m, --model <path>   Path to the Piper model (.onnx)" << std::endl;
+    std::cout << "  -o, --output <path>  Save audio to a WAV file (do not play)" << std::endl;
+    std::cout << "  -h, --help           Show help" << std::endl;
     std::cout << std::endl;
-    std::cout << "Ví dụ:" << std::endl;
+    std::cout << "Examples:" << std::endl;
     std::cout << "  " << program << " \"Hello, I am your robot tutor!\"" << std::endl;
     std::cout << "  " << program << " -m custom_voice.onnx \"Hello world\"" << std::endl;
     std::cout << "  " << program << " -o output.wav \"Save this to file\"" << std::endl;
@@ -48,13 +48,13 @@ int main(int argc, char* argv[]) {
     }
 
     if (text.empty()) {
-        std::cout << "Nhập văn bản cần đọc (Enter để xác nhận):" << std::endl;
+        std::cout << "Enter the text to speak (press Enter to confirm):" << std::endl;
         std::cout << "> ";
         std::getline(std::cin, text);
 
         if (text.empty()) {
             text = FALLBACK_TEXT;
-            std::cout << "Sử dụng text mẫu: \"" << text << "\"" << std::endl;
+            std::cout << "Using sample text: \"" << text << "\"" << std::endl;
         }
     }
 
@@ -65,8 +65,8 @@ int main(int argc, char* argv[]) {
         if (!piper_synthesize_wav(text, model_path, output_file)) {
             return 1;
         }
-        std::cout << "✅ Tổng hợp thành công!" << std::endl;
-        std::cout << "💾 Đã lưu audio vào: " << output_file << std::endl;
+        std::cout << "✅ Synthesis successful!" << std::endl;
+        std::cout << "💾 Audio saved to: " << output_file << std::endl;
         return 0;
     }
 
@@ -77,7 +77,7 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
-    std::cout << "✅ Hoàn tất!" << std::endl;
+    std::cout << "✅ Done!" << std::endl;
 
     if ((SDL_WasInit(SDL_INIT_AUDIO) & SDL_INIT_AUDIO) != 0) {
         SDL_Quit();

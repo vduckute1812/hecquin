@@ -97,7 +97,7 @@ void audio_playback_callback(void* userdata, Uint8* stream, int len) {
 bool open_playback_device(SDL_AudioDeviceID& dev, AudioState& state) {
     if ((SDL_WasInit(SDL_INIT_AUDIO) & SDL_INIT_AUDIO) == 0) {
         if (SDL_Init(SDL_INIT_AUDIO) < 0) {
-            std::cerr << "Lỗi SDL_Init: " << SDL_GetError() << std::endl;
+            std::cerr << "SDL_Init error: " << SDL_GetError() << std::endl;
             return false;
         }
     }
@@ -113,7 +113,7 @@ bool open_playback_device(SDL_AudioDeviceID& dev, AudioState& state) {
 
     dev = SDL_OpenAudioDevice(nullptr, SDL_FALSE, &want, nullptr, 0);
     if (dev == 0) {
-        std::cerr << "Lỗi mở audio device (playback): " << SDL_GetError() << std::endl;
+        std::cerr << "Failed to open audio device (playback): " << SDL_GetError() << std::endl;
         return false;
     }
 
@@ -132,8 +132,8 @@ std::string piper_temp_wav_path() {
 
 bool piper_synthesize_wav(const std::string& text, const std::string& model_path, const std::string& output_wav_path) {
     if (!std::filesystem::exists(model_path)) {
-        std::cerr << "Model không tồn tại: " << model_path << std::endl;
-        std::cerr << "Chạy: ./dev.sh piper:download-model en_US-lessac-medium" << std::endl;
+        std::cerr << "Model not found: " << model_path << std::endl;
+        std::cerr << "Run: ./dev.sh piper:download-model en_US-lessac-medium" << std::endl;
         return false;
     }
 
@@ -142,22 +142,22 @@ bool piper_synthesize_wav(const std::string& text, const std::string& model_path
     const std::string command = "echo " + shell_quote(text) + " | " + shell_quote(PIPER_EXECUTABLE) + " --model " +
                                 shell_quote(model_path) + " --output_file " + shell_quote(output_wav_path);
 
-    std::cout << "🔊 Đang tổng hợp giọng nói..." << std::endl;
+    std::cout << "🔊 Synthesizing speech..." << std::endl;
 
     const int result = std::system(command.c_str());
     if (result != 0) {
         if (result == -1) {
-            std::cerr << "Không thể tạo process cho Piper TTS" << std::endl;
+            std::cerr << "Failed to spawn process for Piper TTS" << std::endl;
         } else if (WIFSIGNALED(result)) {
-            std::cerr << "Piper bị dừng bởi signal: " << WTERMSIG(result) << std::endl;
+            std::cerr << "Piper terminated by signal: " << WTERMSIG(result) << std::endl;
         } else if (WIFEXITED(result)) {
-            std::cerr << "Lỗi chạy Piper TTS (exit code: " << WEXITSTATUS(result) << ")" << std::endl;
+            std::cerr << "Piper TTS failed (exit code: " << WEXITSTATUS(result) << ")" << std::endl;
         } else {
-            std::cerr << "Lỗi chạy Piper TTS (status: " << result << ")" << std::endl;
+            std::cerr << "Piper TTS failed (status: " << result << ")" << std::endl;
         }
 
-        std::cerr << "Đảm bảo Piper đã được cài đặt: ./dev.sh piper:install" << std::endl;
-        std::cerr << "Nếu dùng macOS, cài thêm espeak-ng: brew install espeak-ng" << std::endl;
+        std::cerr << "Ensure Piper is installed: ./dev.sh piper:install" << std::endl;
+        std::cerr << "On macOS, also install espeak-ng: brew install espeak-ng" << std::endl;
         return false;
     }
 
@@ -167,26 +167,26 @@ bool piper_synthesize_wav(const std::string& text, const std::string& model_path
 bool wav_read_s16_mono(const std::string& filename, std::vector<int16_t>& samples) {
     std::ifstream file(filename, std::ios::binary);
     if (!file) {
-        std::cerr << "Không thể mở file: " << filename << std::endl;
+        std::cerr << "Failed to open file: " << filename << std::endl;
         return false;
     }
 
     char header[kWavHeaderSize];
     file.read(header, kWavHeaderSize);
     if (file.gcount() != static_cast<std::streamsize>(kWavHeaderSize)) {
-        std::cerr << "File WAV không hợp lệ (header thiếu dữ liệu)" << std::endl;
+        std::cerr << "Invalid WAV file (header is missing data)" << std::endl;
         return false;
     }
 
     if (header[0] != 'R' || header[1] != 'I' || header[2] != 'F' || header[3] != 'F') {
-        std::cerr << "File không phải định dạng WAV" << std::endl;
+        std::cerr << "File is not in WAV format" << std::endl;
         return false;
     }
 
     file.seekg(0, std::ios::end);
     const std::streampos end_pos = file.tellg();
     if (end_pos < static_cast<std::streampos>(kWavHeaderSize)) {
-        std::cerr << "File WAV không hợp lệ (kích thước quá nhỏ)" << std::endl;
+        std::cerr << "Invalid WAV file (size is too small)" << std::endl;
         return false;
     }
     const size_t file_size = static_cast<size_t>(end_pos);
@@ -198,7 +198,7 @@ bool wav_read_s16_mono(const std::string& filename, std::vector<int16_t>& sample
     samples.resize(num_samples);
     file.read(reinterpret_cast<char*>(samples.data()), static_cast<std::streamsize>(data_size));
     if (!file) {
-        std::cerr << "Không thể đọc dữ liệu PCM từ file WAV" << std::endl;
+        std::cerr << "Failed to read PCM data from WAV file" << std::endl;
         return false;
     }
 
@@ -216,7 +216,7 @@ bool sdl_play_s16_mono_22k(const std::vector<int16_t>& samples) {
         return false;
     }
 
-    std::cout << "🔊 Đang phát giọng nói..." << std::endl;
+    std::cout << "🔊 Playing speech..." << std::endl;
 
     SDL_PauseAudioDevice(audio_dev, 0);
 
@@ -267,7 +267,7 @@ bool piper_synthesize_to_buffer(const std::string& text,
 }
 
 bool piper_speak_and_play(const std::string& text, const std::string& model_path) {
-    std::cout << "🗣️  Piper sẽ nói: " << text << std::endl ;
+    std::cout << "🗣️  Piper will say: " << text << std::endl ;
     const std::string temp_wav = piper_temp_wav_path();
     if (!piper_synthesize_wav(text, model_path, temp_wav)) {
         return false;

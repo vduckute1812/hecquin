@@ -21,12 +21,12 @@ bool AudioCapture::open(std::atomic<bool>& keep_capturing, const AudioCaptureCon
     cfg_ = cfg;
 
     if (SDL_Init(SDL_INIT_AUDIO) < 0) {
-        std::cerr << "Lỗi SDL_Init: " << SDL_GetError() << std::endl;
+        std::cerr << "SDL_Init error: " << SDL_GetError() << std::endl;
         return false;
     }
 
     const int num_devices = SDL_GetNumAudioDevices(SDL_TRUE);
-    std::cout << "Tìm thấy " << num_devices << " thiết bị ghi âm:" << std::endl;
+    std::cout << "Found " << num_devices << " recording device(s):" << std::endl;
     for (int i = 0; i < num_devices; ++i) {
         std::cout << "  [" << i << "] " << SDL_GetAudioDeviceName(i, SDL_TRUE) << std::endl;
     }
@@ -43,16 +43,16 @@ bool AudioCapture::open(std::atomic<bool>& keep_capturing, const AudioCaptureCon
     const char* device_name = nullptr;
     if (cfg_.device_index >= 0 && cfg_.device_index < num_devices) {
         device_name = SDL_GetAudioDeviceName(cfg_.device_index, SDL_TRUE);
-        std::cout << "→ Chọn thiết bị [" << cfg_.device_index << "] " << device_name << std::endl;
+        std::cout << "→ Selected device [" << cfg_.device_index << "] " << device_name << std::endl;
     } else if (cfg_.device_index >= 0) {
         std::cerr << "AUDIO_DEVICE_INDEX=" << cfg_.device_index
-                  << " ngoài phạm vi (0.." << num_devices - 1 << "), dùng mặc định." << std::endl;
+                  << " out of range (0.." << num_devices - 1 << "), using default." << std::endl;
     }
 
     SDL_AudioSpec have;
     device_id_ = SDL_OpenAudioDevice(device_name, SDL_TRUE, &want, &have, 0);
     if (device_id_ == 0) {
-        std::cerr << "Lỗi mở audio device: " << SDL_GetError() << std::endl;
+        std::cerr << "Failed to open audio device: " << SDL_GetError() << std::endl;
         return false;
     }
 

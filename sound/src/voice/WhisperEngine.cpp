@@ -18,11 +18,11 @@ void whisper_context_deleter(whisper_context* ctx) noexcept {
 } // namespace detail
 
 WhisperEngine::WhisperEngine(const char* model_path) {
-    std::cout << "Đang tải model Whisper..." << std::endl;
+    std::cout << "Loading Whisper model..." << std::endl;
     whisper_context_params cparams = whisper_context_default_params();
     whisper_context* raw = whisper_init_from_file_with_params(model_path, cparams);
     if (!raw) {
-        std::cerr << "Lỗi: Không thể tải file model!" << std::endl;
+        std::cerr << "Error: Failed to load model file!" << std::endl;
         return;
     }
     ctx_.reset(raw);
@@ -35,7 +35,7 @@ std::string WhisperEngine::transcribe(const std::vector<float>& samples) {
         return {};
     }
 
-    std::cout << "🔍 Đang nhận diện..." << std::endl;
+    std::cout << "🔍 Recognizing..." << std::endl;
 
     whisper_full_params wparams = whisper_full_default_params(WHISPER_SAMPLING_GREEDY);
     wparams.print_progress = false;
@@ -48,7 +48,7 @@ std::string WhisperEngine::transcribe(const std::vector<float>& samples) {
     std::string joined;
     if (whisper_full(ctx, wparams, samples.data(), static_cast<int>(samples.size())) == 0) {
         const int n_segments = whisper_full_n_segments(ctx);
-        std::cout << "📝 Kết quả:" << std::endl;
+        std::cout << "📝 Result:" << std::endl;
         for (int i = 0; i < n_segments; ++i) {
             const char* text = whisper_full_get_segment_text(ctx, i);
             if (text && std::strlen(text) > 0) {

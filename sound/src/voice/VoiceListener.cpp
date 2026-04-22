@@ -116,8 +116,8 @@ void VoiceListener::run() {
     bool collecting = false;
     int speech_ms = 0;
 
-    std::cout << "\n🎤 Đang lắng nghe... (Nói bất kỳ lúc nào!)" << std::endl;
-    std::cout << "Nhấn Ctrl+C để thoát.\n" << std::endl;
+    std::cout << "\n🎤 Listening... (Speak anytime!)" << std::endl;
+    std::cout << "Press Ctrl+C to exit.\n" << std::endl;
 
     capture_.resumeDevice();
 
@@ -129,7 +129,7 @@ void VoiceListener::run() {
             collecting = true;
             speech_ms = 0;
             silence_ms = 0;
-            std::cout << "🔴 Đang ghi âm..." << std::endl;
+            std::cout << "🔴 Recording..." << std::endl;
         }
 
         if (collecting) {
@@ -143,7 +143,7 @@ void VoiceListener::run() {
 
             if (speech_ms >= cfg_.min_speech_ms && silence_ms >= cfg_.end_silence_ms) {
                 collecting = false;
-                std::cout << "⏹ Ghi âm hoàn thành!" << std::endl;
+                std::cout << "⏹ Recording complete!" << std::endl;
 
                 const std::string transcript = whisper_.transcribe(live);
                 if (!transcript.empty()) {
@@ -167,7 +167,7 @@ void VoiceListener::run() {
                 }
 
                 capture_.clearBuffer();
-                std::cout << "🎤 Lắng nghe tiếp...\n" << std::endl;
+                std::cout << "🎤 Listening again...\n" << std::endl;
             }
         }
 
