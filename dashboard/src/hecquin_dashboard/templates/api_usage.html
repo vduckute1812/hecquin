@@ -1,0 +1,60 @@
+{% extends "base.html" %}
+{% block title %}API Usage · {{ app_name }}{% endblock %}
+
+{% block content %}
+<h1>API Usage</h1>
+
+<form class="range-form" id="rangeForm">
+  <label for="days">Last</label>
+  <input type="number" id="days" name="days" min="1" max="365"
+         value="{{ default_days }}" />
+  <span>days</span>
+  <button type="submit">Refresh</button>
+</form>
+
+<div class="grid-2">
+  {% with id="outboundDaily",
+        title="Outbound calls by provider",
+        endpoint="/api/v1/api-calls/daily",
+        key="outbound_daily" %}
+    {% include "partials/chart_card.html" %}
+  {% endwith %}
+
+  {% with id="inboundDaily",
+        title="Inbound dashboard requests",
+        endpoint="/api/v1/api-calls/daily",
+        key="inbound_daily" %}
+    {% include "partials/chart_card.html" %}
+  {% endwith %}
+</div>
+
+<section class="card">
+  <h2>Top endpoints (by volume)</h2>
+  <table class="data-table" id="topEndpointsTable"
+         data-endpoint="/api/v1/api-calls/daily"
+         data-key="top_endpoints">
+    <thead>
+      <tr>
+        <th>Endpoint</th><th>Provider</th><th>Count</th>
+        <th>Avg latency (ms)</th><th>Error rate</th>
+      </tr>
+    </thead>
+    <tbody></tbody>
+  </table>
+</section>
+
+<section class="card">
+  <h2>Recent outbound calls</h2>
+  <table class="data-table" id="recentOutboundTable"
+         data-endpoint="/api/v1/api-calls/recent/outbound"
+         data-key="__list__">
+    <thead>
+      <tr>
+        <th>When (UTC)</th><th>Provider</th><th>Endpoint</th>
+        <th>Status</th><th>Latency (ms)</th><th>Error</th>
+      </tr>
+    </thead>
+    <tbody></tbody>
+  </table>
+</section>
+{% endblock %}

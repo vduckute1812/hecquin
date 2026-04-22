@@ -1,3 +1,5 @@
+#include "ai/IHttpClient.hpp"
+#include "ai/LoggingHttpClient.hpp"
 #include "config/AppConfig.hpp"
 #include "learning/EmbeddingClient.hpp"
 #include "learning/Ingestor.hpp"
@@ -88,7 +90,18 @@ int main(int argc, char** argv) {
         return 1;
     }
 
-    hecquin::learning::EmbeddingClient embedder(app.ai);
+    // Log every outbound embedding POST to the `api_calls` table so the
+    // dashboard can chart ingestion traffic alongside live tutor traffic.
+    hecquin::ai::CurlHttpClient    raw_http;
+    hecquin::ai::LoggingHttpClient embed_http(raw_http, "embedding",
+        [&store](const hecquin::ai::ApiCallRecord& r) {
+            store.record_api_call(r.provider, r.endpoint, r.method,
+                                  r.status, r.latency_ms,
+                                  r.request_bytes, r.response_bytes,
+                                  r.ok, r.error);
+        });
+
+    hecquin::learning::EmbeddingClient embedder(app.ai, embed_http);
     if (!embedder.ready()) {
         std::cerr << "Embedding client is not configured "
                   << "(need GEMINI_API_KEY / OPENAI_API_KEY + libcurl)." << std::endl;

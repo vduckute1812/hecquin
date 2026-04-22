@@ -1,0 +1,49 @@
+{% extends "base.html" %}
+{% block title %}Learning · {{ app_name }}{% endblock %}
+
+{% block content %}
+<h1>Learning progress</h1>
+
+<form class="range-form" id="rangeForm">
+  <label for="days">Last</label>
+  <input type="number" id="days" name="days" min="1" max="365"
+         value="{{ default_days }}" />
+  <span>days</span>
+  <button type="submit">Refresh</button>
+</form>
+
+<div class="grid-2">
+  {% with id="vocabGrowth",
+        title="Vocabulary growth",
+        endpoint="/api/v1/learning/overview",
+        key="vocab_growth" %}
+    {% include "partials/chart_card.html" %}
+  {% endwith %}
+
+  {% with id="sessionsDaily",
+        title="Sessions per day",
+        endpoint="/api/v1/learning/overview",
+        key="sessions_daily" %}
+    {% include "partials/chart_card.html" %}
+  {% endwith %}
+
+  {% with id="pronDaily",
+        title="Pronunciation score",
+        endpoint="/api/v1/learning/overview",
+        key="pronunciation_daily" %}
+    {% include "partials/chart_card.html" %}
+  {% endwith %}
+</div>
+
+<section class="card">
+  <h2>Most-seen vocabulary</h2>
+  <table class="data-table" id="topVocabTable"
+         data-endpoint="/api/v1/learning/vocab/top?limit=25"
+         data-key="__list__">
+    <thead>
+      <tr><th>Word</th><th>Seen</th><th>Mastery</th></tr>
+    </thead>
+    <tbody></tbody>
+  </table>
+</section>
+{% endblock %}

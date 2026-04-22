@@ -43,6 +43,7 @@ if (NOT TARGET hecquin_ai)
         ${HECQUIN_SOUND_SRC_ROOT}/ai/OpenAiChatContent.cpp
         ${HECQUIN_SOUND_SRC_ROOT}/ai/LocalIntentMatcher.cpp
         ${HECQUIN_SOUND_SRC_ROOT}/ai/ChatClient.cpp
+        ${HECQUIN_SOUND_SRC_ROOT}/ai/LoggingHttpClient.cpp
     )
     target_include_directories(hecquin_ai PUBLIC ${HECQUIN_SOUND_SRC_ROOT})
     target_link_libraries(hecquin_ai PUBLIC
@@ -75,6 +76,12 @@ endif ()
 if (HECQUIN_HAS_SQLITE AND NOT TARGET hecquin_learning)
     add_library(hecquin_learning STATIC
         ${HECQUIN_SOUND_SRC_ROOT}/learning/LearningStore.cpp
+        ${HECQUIN_SOUND_SRC_ROOT}/learning/LearningStoreMigrations.cpp
+        ${HECQUIN_SOUND_SRC_ROOT}/learning/LearningStoreDocuments.cpp
+        ${HECQUIN_SOUND_SRC_ROOT}/learning/LearningStoreVectorSearch.cpp
+        ${HECQUIN_SOUND_SRC_ROOT}/learning/LearningStoreSessions.cpp
+        ${HECQUIN_SOUND_SRC_ROOT}/learning/LearningStorePronunciation.cpp
+        ${HECQUIN_SOUND_SRC_ROOT}/learning/LearningStoreApiCalls.cpp
         ${HECQUIN_SOUND_SRC_ROOT}/learning/EmbeddingClient.cpp
         ${HECQUIN_SOUND_SRC_ROOT}/learning/Ingestor.cpp
         ${HECQUIN_SOUND_SRC_ROOT}/learning/TextChunker.cpp

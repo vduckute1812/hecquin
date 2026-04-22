@@ -1,0 +1,11 @@
+{#
+    Reusable chart card.  `id` is the HTML id of the <canvas>; a neighbouring
+    <h2> carries `title`.  The chart is rendered by static/js/app.js, which
+    looks up canvases via their data-endpoint attribute.
+#}
+<section class="card">
+  <h2>{{ title }}</h2>
+  <div class="chart-wrap">
+    <canvas id="{{ id }}" data-endpoint="{{ endpoint }}" data-key="{{ key }}"></canvas>
+  </div>
+</section>

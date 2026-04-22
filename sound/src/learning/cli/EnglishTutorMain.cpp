@@ -1,4 +1,6 @@
 #include "ai/CommandProcessor.hpp"
+#include "ai/IHttpClient.hpp"
+#include "ai/LoggingHttpClient.hpp"
 #include "learning/EmbeddingClient.hpp"
 #include "learning/EnglishTutorProcessor.hpp"
 #include "learning/LearningStore.hpp"
@@ -34,12 +36,29 @@ int main() {
     AppConfig& cfg = app.config();
 
     hecquin::learning::LearningStore store(cfg.learning.db_path, cfg.ai.embedding_dim);
-    if (!store.open()) {
+    const bool store_open = store.open();
+    if (!store_open) {
         std::cerr << "[english_tutor] Learning DB unavailable; continuing without RAG / progress."
                   << std::endl;
     }
 
-    hecquin::learning::EmbeddingClient   embedder(cfg.ai);
+    // Decorator chain: CurlHttpClient  →  LoggingHttpClient  →  {ChatClient, EmbeddingClient}
+    // When the DB opened we bind the sink to `record_api_call`; otherwise the
+    // decorator becomes a transparent passthrough.
+    hecquin::ai::CurlHttpClient      raw_http;
+    hecquin::ai::ApiCallSink         sink;
+    if (store_open) {
+        sink = [&store](const hecquin::ai::ApiCallRecord& r) {
+            store.record_api_call(r.provider, r.endpoint, r.method,
+                                  r.status, r.latency_ms,
+                                  r.request_bytes, r.response_bytes,
+                                  r.ok, r.error);
+        };
+    }
+    hecquin::ai::LoggingHttpClient   http(raw_http, "chat", sink);
+    hecquin::ai::LoggingHttpClient   embed_http(raw_http, "embedding", sink);
+
+    hecquin::learning::EmbeddingClient   embedder(cfg.ai, embed_http);
     hecquin::learning::RetrievalService  retrieval(store, embedder);
     hecquin::learning::ProgressTracker   progress(store, "lesson");
 
@@ -47,7 +66,7 @@ int main() {
     tcfg.rag_top_k = cfg.learning.rag_top_k;
     hecquin::learning::EnglishTutorProcessor tutor(cfg.ai, retrieval, progress, tcfg);
 
-    CommandProcessor commands(cfg.ai);
+    CommandProcessor commands(cfg.ai, http);
     VoiceListener listener(app.whisper(), app.capture(), commands,
                            app.running(), app.piper_model_path());
     listener.setTutorCallback([&tutor](const Utterance& u) {

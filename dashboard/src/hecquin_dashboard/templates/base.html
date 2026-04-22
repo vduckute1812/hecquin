@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>{% block title %}{{ app_name }}{% endblock %}</title>
+  <link rel="stylesheet" href="{{ request.url_for('static', path='css/style.css') }}" />
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"
+          crossorigin="anonymous"></script>
+</head>
+<body>
+<header class="topbar">
+  <div class="brand">{{ app_name }}</div>
+  <nav>
+    <a href="/">Overview</a>
+    <a href="/learning">Learning</a>
+    <a href="/api-usage">API Usage</a>
+    <a href="/pronunciation">Pronunciation</a>
+  </nav>
+</header>
+
+<main class="container">
+  {% block content %}{% endblock %}
+</main>
+
+<footer class="footer">
+  <span>Hecquin dashboard &middot; {{ app_name }}</span>
+  <span id="lastUpdated"></span>
+</footer>
+
+<script src="{{ request.url_for('static', path='js/app.js') }}" defer></script>
+{% block extra_scripts %}{% endblock %}
+</body>
+</html>

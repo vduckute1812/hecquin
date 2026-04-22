@@ -94,11 +94,29 @@ public:
     /** Read up to `limit` example drill sentences stored in documents(kind='drill'). */
     std::vector<std::string> sample_drill_sentences(int limit) const;
 
+    /**
+     * Append one outbound API call log row (LLM/embedding/etc.). Written by the
+     * C++ `LoggingHttpClient` decorator on every request; read by the dashboard
+     * module to chart daily traffic, latency, and error rates.
+     *
+     * `error` is the empty string on success; non-empty values are surfaced as
+     * `ok=0` rows so the dashboard can compute failure rates without joining.
+     */
+    void record_api_call(const std::string& provider,
+                         const std::string& endpoint,
+                         const std::string& method,
+                         long status,
+                         long latency_ms,
+                         long request_bytes,
+                         long response_bytes,
+                         bool ok,
+                         const std::string& error);
+
     const std::string& db_path() const { return db_path_; }
     int embedding_dim() const { return embedding_dim_; }
 
     /** Current schema version this build writes. Bump whenever DDL changes. */
-    static constexpr int kSchemaVersion = 1;
+    static constexpr int kSchemaVersion = 2;
 
 private:
     bool run_migrations_();

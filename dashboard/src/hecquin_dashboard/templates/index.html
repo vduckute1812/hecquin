@@ -1,0 +1,45 @@
+{% extends "base.html" %}
+{% block title %}Overview · {{ app_name }}{% endblock %}
+
+{% block content %}
+<h1>Overview</h1>
+
+<section class="kpi-grid">
+  <div class="kpi">
+    <span class="kpi-label">API calls today (outbound)</span>
+    <span class="kpi-value">{{ overview.today_api_calls }}</span>
+  </div>
+  <div class="kpi">
+    <span class="kpi-label">Dashboard requests today</span>
+    <span class="kpi-value">{{ overview.today_inbound_requests }}</span>
+  </div>
+  <div class="kpi">
+    <span class="kpi-label">Sessions today</span>
+    <span class="kpi-value">{{ overview.today_sessions }}</span>
+  </div>
+  <div class="kpi">
+    <span class="kpi-label">Avg pronunciation (7d)</span>
+    <span class="kpi-value">{{ '%.1f' % overview.avg_pron_score_7d }}</span>
+  </div>
+  <div class="kpi">
+    <span class="kpi-label">Vocabulary total</span>
+    <span class="kpi-value">{{ overview.vocab_total }}</span>
+  </div>
+</section>
+
+<div class="grid-2">
+  {% with id="outboundDaily",
+        title="Outbound API calls — last 14 days",
+        endpoint="/api/v1/api-calls/daily?days=14",
+        key="outbound_daily" %}
+    {% include "partials/chart_card.html" %}
+  {% endwith %}
+
+  {% with id="inboundDaily",
+        title="Inbound requests — last 14 days",
+        endpoint="/api/v1/api-calls/daily?days=14",
+        key="inbound_daily" %}
+    {% include "partials/chart_card.html" %}
+  {% endwith %}
+</div>
+{% endblock %}

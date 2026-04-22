@@ -1,0 +1,33 @@
+{% extends "base.html" %}
+{% block title %}Pronunciation · {{ app_name }}{% endblock %}
+
+{% block content %}
+<h1>Pronunciation</h1>
+
+<section class="card">
+  <h2>Weakest phonemes</h2>
+  {% if weakest %}
+  <table class="data-table">
+    <thead>
+      <tr><th>IPA</th><th>Attempts</th><th>Average score</th></tr>
+    </thead>
+    <tbody>
+      {% for p in weakest %}
+      <tr>
+        <td class="ipa">{{ p.ipa }}</td>
+        <td>{{ p.attempts }}</td>
+        <td>
+          <div class="score-bar">
+            <span class="bar" style="width: {{ (p.avg_score|float) }}%"></span>
+            <span class="score-label">{{ '%.1f' % p.avg_score }}</span>
+          </div>
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <p class="empty">No drill attempts recorded yet.</p>
+  {% endif %}
+</section>
+{% endblock %}

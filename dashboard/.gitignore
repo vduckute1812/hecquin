@@ -1,0 +1,22 @@
+# Virtualenv & build artefacts
+.venv/
+venv/
+*.egg-info/
+build/
+dist/
+
+# SSL material — never commit
+certs/*.crt
+certs/*.key
+certs/*.pem
+certs/*.csr
+
+# Environment
+.env
+
+# Tooling
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
