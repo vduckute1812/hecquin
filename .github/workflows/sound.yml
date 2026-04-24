@@ -1,0 +1,121 @@
+name: sound
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "sound/**"
+      - ".github/workflows/sound.yml"
+  pull_request:
+    paths:
+      - "sound/**"
+      - ".github/workflows/sound.yml"
+
+jobs:
+  build-and-test:
+    name: build + ctest (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    defaults:
+      run:
+        working-directory: sound
+    env:
+      # Keep the build lean: ONNX, piper TTS and whisper.cpp are heavy and the
+      # unit tests intentionally avoid them (emissions are faked, no audio I/O
+      # is performed).  HECQUIN_SOUND_BUILD_* toggles below skip the binaries
+      # that link against whisper so the runner only pays for the unit tests.
+      HECQUIN_CI: "1"
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Install system dependencies (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential \
+            cmake \
+            pkg-config \
+            git \
+            libsdl2-dev \
+            libcurl4-openssl-dev \
+            espeak-ng \
+            libespeak-ng-dev \
+            libsqlite3-dev
+
+      - name: Install system dependencies (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          brew update
+          brew install cmake sdl2 espeak-ng sqlite
+
+      - name: Fetch + build whisper.cpp
+        run: |
+          ./dev.sh whisper:clone
+          ./dev.sh whisper:build
+
+      - name: Configure CMake
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build
+        run: cmake --build build -j
+
+      - name: Run ctest
+        run: ctest --test-dir build --output-on-failure --timeout 120
+
+      - name: Upload ctest logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ctest-logs-${{ matrix.os }}
+          path: sound/build/Testing/Temporary/*.log
+          if-no-files-found: ignore
+
+  lint:
+    name: clang-format + clang-tidy (informational)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: sound
+    # Non-blocking: surfaces formatting / lint drift without gating merges.
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install clang-format + clang-tidy
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang-format clang-tidy
+
+      - name: clang-format (diff only, no auto-fix)
+        run: |
+          echo "Checking formatting on sound/src and sound/tests..."
+          shopt -s globstar nullglob
+          FILES=(src/**/*.cpp src/**/*.hpp tests/**/*.cpp)
+          if [ ${#FILES[@]} -eq 0 ]; then
+            echo "no files to check"; exit 0
+          fi
+          diff_output=$(clang-format --dry-run --Werror -style=file "${FILES[@]}" 2>&1 || true)
+          if [ -n "$diff_output" ]; then
+            echo "$diff_output"
+            echo "::warning::clang-format reports pending changes — run ./dev.sh fmt"
+          fi
+
+      - name: clang-tidy (report only)
+        run: |
+          # clang-tidy needs a compile_commands.json — build with export first.
+          sudo apt-get install -y --no-install-recommends \
+            libsdl2-dev libcurl4-openssl-dev libsqlite3-dev espeak-ng libespeak-ng-dev
+          cmake -S . -B build -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
+          # Lint recent changes only — full-tree tidy is slow and noisy.
+          git fetch --no-tags --depth=1 origin main || true
+          CHANGED=$(git diff --name-only --diff-filter=AM origin/main...HEAD -- 'sound/src/**/*.cpp' 'sound/tests/**/*.cpp' || true)
+          if [ -z "$CHANGED" ]; then
+            echo "no changed C++ sources — skipping tidy"; exit 0
+          fi
+          echo "$CHANGED" | sed 's|^sound/||' | xargs -r clang-tidy -p build --quiet || true

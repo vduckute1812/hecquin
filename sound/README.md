@@ -624,7 +624,10 @@ Model not found: .env/shared/models/ggml-base.bin
 
 ## License
 
-Part of the Hecquin Robot Tutor project.
+Released under the [GNU General Public License v3.0](../LICENSE). Part of the
+Hecquin Robot Tutor project. See `LICENSE` at the repo root for the full
+text. Anyone who distributes a modified version of this code (in source or
+binary form) must release their changes under the same license.
 
 ## Dependencies
 
