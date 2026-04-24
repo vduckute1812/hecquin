@@ -3,8 +3,14 @@
 #include "learning/pronunciation/PhonemeTypes.hpp"
 
 #include <string>
+#include <unordered_map>
 
 namespace hecquin::learning::pronunciation {
+
+struct PhonemeCalibration {
+    float min_logp = -12.0f;
+    float max_logp = 0.0f;
+};
 
 struct PronunciationScorerConfig {
     /**
@@ -17,6 +23,18 @@ struct PronunciationScorerConfig {
      * Upper anchor for the 0..100 mapping.  0 logp = 1.0 posterior = 100.
      */
     float max_logp = 0.0f;
+
+    /**
+     * Per-phoneme calibration overrides, keyed by IPA.  Useful because
+     * nasals and fricatives routinely post lower log-posteriors than
+     * vowels even when articulated correctly — a global floor penalises
+     * them unfairly.  Typical source: `.env/shared/models/pronunciation/calibration.json`.
+     * Missing entries fall back to the global `(min_logp, max_logp)` pair.
+     */
+    std::unordered_map<std::string, PhonemeCalibration> per_phoneme;
+
+    /** Load per-phoneme overrides from a JSON file; missing/malformed → no-op. */
+    bool load_calibration_json(const std::string& path);
 };
 
 /**
@@ -35,11 +53,16 @@ public:
      * empty score on mismatch.
      */
     [[nodiscard]] PronunciationScore score(const G2PResult& plan,
-                                           const AlignResult& alignment,
-                                           float frame_stride_ms) const;
+                                           const AlignResult& alignment) const;
 
     /** Convert a log-prob to 0..100, clamped to the config anchors. */
     [[nodiscard]] float logp_to_score(float logp) const;
+
+    /**
+     * Convert a log-prob to 0..100 using the per-phoneme override for
+     * `ipa` when one is configured, otherwise the global anchors.
+     */
+    [[nodiscard]] float logp_to_score(float logp, const std::string& ipa) const;
 
 private:
     PronunciationScorerConfig cfg_;

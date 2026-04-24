@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cmath>
 #include <limits>
+#include <vector>
 
 namespace hecquin::learning::prosody {
 
@@ -28,23 +29,64 @@ std::vector<float> voiced_semitones(const PitchContour& c) {
     return st;
 }
 
-// Vanilla Sakoe–Chiba DTW (no band) returning the mean absolute warp cost.
-float dtw_mean_abs(const std::vector<float>& a, const std::vector<float>& b) {
+// Banded DTW (Sakoe–Chiba) with rolling rows.  Memory is O(min(N,M)) rather
+// than O(N·M) and runtime is O(max(N,M) · r) where `r` is the band radius.
+// For the contours we see in practice (~300 frames at 10 ms hop), that's a
+// ~10× improvement both in time and in space without changing the alignment
+// path on similar-length inputs.
+float dtw_mean_abs_banded(const std::vector<float>& a, const std::vector<float>& b, int band) {
     if (a.empty() || b.empty()) return std::numeric_limits<float>::infinity();
     const std::size_t N = a.size(), M = b.size();
-    std::vector<std::vector<double>> D(N + 1, std::vector<double>(M + 1,
-        std::numeric_limits<double>::infinity()));
-    D[0][0] = 0.0;
+    const std::size_t bw = band <= 0
+        ? std::max(N, M)
+        : static_cast<std::size_t>(band);
+
+    constexpr double kInf = std::numeric_limits<double>::infinity();
+    std::vector<double> prev(M + 1, kInf);
+    std::vector<double> cur(M + 1, kInf);
+    prev[0] = 0.0;
+
     for (std::size_t i = 1; i <= N; ++i) {
-        for (std::size_t j = 1; j <= M; ++j) {
-            const double cost = std::abs(static_cast<double>(a[i - 1] - b[j - 1]));
-            const double prev = std::min({D[i - 1][j], D[i][j - 1], D[i - 1][j - 1]});
-            D[i][j] = cost + prev;
+        // Center of the band on row i maps to j ≈ i * (M/N); reject cells
+        // that fall outside [center - bw, center + bw].
+        const double center = (N > 0)
+            ? static_cast<double>(i) * static_cast<double>(M) /
+              static_cast<double>(N)
+            : 0.0;
+        const std::size_t jlo = static_cast<std::size_t>(
+            std::max<long long>(1, static_cast<long long>(std::ceil(center - static_cast<double>(bw)))));
+        const std::size_t jhi = static_cast<std::size_t>(
+            std::min<long long>(static_cast<long long>(M),
+                                static_cast<long long>(std::floor(center + static_cast<double>(bw)))));
+
+        std::fill(cur.begin(), cur.end(), kInf);
+        if (jlo <= jhi) {
+            for (std::size_t j = jlo; j <= jhi; ++j) {
+                const double cost = std::abs(static_cast<double>(a[i - 1] - b[j - 1]));
+                const double from_stay = prev[j];
+                const double from_left = cur[j - 1];
+                const double from_diag = prev[j - 1];
+                double best = std::min({from_stay, from_left, from_diag});
+                if (std::isinf(best)) continue;
+                cur[j] = cost + best;
+            }
         }
+        std::swap(prev, cur);
+    }
+    if (std::isinf(prev[M])) {
+        // Fall back to diagonal-only path cost so the caller never sees inf
+        // (rare: only triggers when the band is too narrow for a degenerate
+        // length mismatch).
+        double diag_cost = 0.0;
+        const std::size_t L = std::min(N, M);
+        for (std::size_t k = 0; k < L; ++k) {
+            diag_cost += std::abs(static_cast<double>(a[k] - b[k]));
+        }
+        return static_cast<float>(diag_cost / static_cast<double>(N + M));
     }
     // Path length for the diagonal-only baseline is max(N, M) ≤ len ≤ N + M.
     // Normalise by N + M to stay comparable across contour lengths.
-    return static_cast<float>(D[N][M] / static_cast<double>(N + M));
+    return static_cast<float>(prev[M] / static_cast<double>(N + M));
 }
 
 }  // namespace
@@ -72,9 +114,14 @@ FinalDirection IntonationScorer::final_direction(const PitchContour& c) const {
     first /= static_cast<double>(third);
     last  /= static_cast<double>(third);
 
-    const float delta = static_cast<float>(last - first);
-    if (delta > cfg_.direction_delta_hz) return FinalDirection::Rising;
-    if (delta < -cfg_.direction_delta_hz) return FinalDirection::Falling;
+    // Compare in semitones rather than raw Hz so the threshold is symmetric
+    // between low-pitched (male, ~100 Hz) and high-pitched (child, ~300 Hz)
+    // voices — a 15 Hz rise at 100 Hz is a ~2.4 st jump but at 300 Hz it is
+    // barely noticeable at ~0.8 st.
+    if (first <= 0.0 || last <= 0.0) return FinalDirection::Unknown;
+    const double st = 12.0 * std::log2(last / first);
+    if (st >  cfg_.direction_delta_semitones) return FinalDirection::Rising;
+    if (st < -cfg_.direction_delta_semitones) return FinalDirection::Falling;
     return FinalDirection::Flat;
 }
 
@@ -91,7 +138,13 @@ IntonationScore IntonationScorer::score(const PitchContour& reference,
         return out;
     }
 
-    const float rmse = dtw_mean_abs(ref_st, lrn_st);
+    const std::size_t max_len = std::max(ref_st.size(), lrn_st.size());
+    int band = 0;
+    if (cfg_.band_ratio > 0.0f) {
+        band = static_cast<int>(std::ceil(cfg_.band_ratio * static_cast<float>(max_len)));
+        band = std::max(band, cfg_.band_min);
+    }
+    const float rmse = dtw_mean_abs_banded(ref_st, lrn_st, band);
     const float clamped = std::clamp(rmse, cfg_.best_semitone_rmse, cfg_.worst_semitone_rmse);
     const float t = (cfg_.worst_semitone_rmse - clamped) /
                     (cfg_.worst_semitone_rmse - cfg_.best_semitone_rmse);

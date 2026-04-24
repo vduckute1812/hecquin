@@ -30,21 +30,26 @@ AudioCapture (SDL2, 16 kHz mono float32)
 VoiceListener — polls every 50 ms
     │   VAD: RMS > 0.02 for ≥ 500 ms → speech start
     │         800 ms of silence  → speech end
+    │   Secondary gate (pure `evaluate_secondary_gate`) rejects with an
+    │   explicit `too_quiet` / `too_sparse` reason before Whisper runs.
     ▼
-WhisperEngine — one-shot greedy transcription (English)
+WhisperEngine — one-shot decode (language + n_threads + beam_size from `WhisperConfig`)
     │
     ▼
 CommandProcessor
-    ├── Local regex matching (no network, instant)
-    │       "turn on/off" + device  → DeviceAction
-    │       "tell me a story"       → TopicSearchAction
-    │       "open music"            → MusicAction
+    ├── Local regex matching (no network, instant; patterns from `AppConfig`)
+    │       "turn on/off" + device        → DeviceAction
+    │       "tell me a story"             → TopicSearchAction
+    │       "open music"                  → MusicAction
+    │       "start english lesson" / "exit lesson" → LessonModeToggle
+    │       "start pronunciation drill" / "exit drill" → DrillModeToggle
     │
-    └── External API fallback (async, libcurl)
+    └── External API fallback (synchronous; wrapped in RetryingHttpClient → LoggingHttpClient → CurlHttpClient)
             POST /v1/chat/completions → ExternalApiAction
     │
     ▼
-PiperSpeech — synthesize WAV via subprocess → SDL2 playback
+PiperSpeech — persistent stdin subprocess (or in-process `piper_synthesize_to_buffer`)
+            → streaming SDL2 playback (producer/consumer ring)
     │
     ▼
 Speaker
@@ -57,53 +62,77 @@ Speaker
 ```
 src/
 ├── voice/
-│   ├── AudioCapture.hpp/cpp      — SDL2 microphone capture
+│   ├── AudioCapture.hpp/cpp      — SDL2 microphone capture (+ `MuteGuard` RAII, `snapshotRecent` tail copy)
 │   ├── AudioCaptureConfig.hpp    — POD config (no SDL include)
-│   ├── WhisperEngine.hpp/cpp     — whisper.cpp inference wrapper
-│   ├── VoiceListener.hpp/cpp     — VAD + pipeline orchestration
+│   ├── WhisperEngine.hpp/cpp     — whisper.cpp wrapper + env-driven `WhisperConfig` (language / threads / beam)
+│   ├── VoiceListener.hpp/cpp     — thin coordinator: poll loop + mode state machine
+│   ├── UtteranceCollector.hpp/cpp— primary VAD, collection timers, full-buffer snapshot on close
+│   ├── SecondaryVadGate.hpp/cpp  — pure `evaluate_secondary_gate(...)` (mean-RMS + voiced-ratio)
+│   ├── TtsResponsePlayer.hpp/cpp — TTS sanitise + `MuteGuard` wrap + Piper playback
+│   ├── UtteranceRouter.hpp/cpp   — Chain of Responsibility: local-intent → drill cb → tutor cb → chat
 │   ├── VoiceApp.hpp/cpp          — shared bootstrap for voice executables
 │   └── VoiceDetector.cpp         — voice_detector executable entry point
 ├── ai/
 │   ├── IHttpClient.hpp           — abstract HTTP transport (testable)
 │   ├── HttpClient.hpp/cpp        — libcurl `http_post_json` + `CurlHttpClient`
 │   ├── LoggingHttpClient.hpp/cpp — decorator: IHttpClient → ApiCallSink telemetry
-│   ├── LocalIntentMatcher.hpp/cpp— regex-based local intents
+│   ├── RetryingHttpClient.hpp/cpp— decorator: exponential backoff on 5xx / 429 / transport errors
+│   ├── LocalIntentMatcher.hpp/cpp— regex-based local intents, patterns injected from `AppConfig`
 │   ├── ChatClient.hpp/cpp        — remote LLM client (IHttpClient injected)
 │   ├── CommandProcessor.hpp/cpp  — façade: matcher + chat
+│   ├── HttpReplyBuckets.hpp/cpp  — shared `short_reply_for_status(...)` used by chat + tutor error paths
 │   └── OpenAiChatContent.hpp/cpp — nlohmann/json response extractor
+├── observability/
+│   └── Log.hpp                   — tiny structured logger (pretty / JSON via `HECQUIN_LOG_FORMAT`, level via `HECQUIN_LOG_LEVEL`)
 ├── common/
 │   └── StringUtils.hpp           — header-only trim/lower/starts_with
 ├── learning/
-│   ├── store/                             — SQLite-backed persistence (one class, split impl)
-│   │   ├── LearningStore.hpp              — Public API (one class)
+│   ├── store/                             — SQLite-backed persistence (façade + `detail::` free functions)
+│   │   ├── LearningStore.hpp              — Public façade (single connection, thin forwarders)
 │   │   ├── LearningStore.cpp              — lifecycle + metadata (open/close, kv)
 │   │   ├── LearningStoreMigrations.cpp    — all DDL (schema v2)
-│   │   ├── LearningStoreDocuments.cpp     — documents + ingested_files + drill pool
-│   │   ├── LearningStoreVectorSearch.cpp  — query_top_k (vec0 + BLOB fallback)
-│   │   ├── LearningStoreSessions.cpp      — sessions + interactions + vocab
-│   │   ├── LearningStorePronunciation.cpp — pronunciation_attempts + phoneme_mastery
-│   │   ├── LearningStoreApiCalls.cpp      — api_calls (written by LoggingHttpClient)
+│   │   ├── LearningStoreDocuments.cpp     — forwards to `detail::DocumentsOps`
+│   │   ├── LearningStoreVectorSearch.cpp  — forwards to `detail::VectorSearchOps`
+│   │   ├── LearningStoreSessions.cpp      — forwards to `detail::SessionsOps`
+│   │   ├── LearningStorePronunciation.cpp — forwards to `detail::PronunciationOps`
+│   │   ├── LearningStoreApiCalls.cpp      — forwards to `detail::ApiCallsOps`
+│   │   ├── detail/*.hpp                   — per-aggregate free-function headers (take `sqlite3*` + StatementCache&)
 │   │   └── internal/SqliteHelpers.hpp     — private RAII glue (StmtGuard, Transaction, prepare_or_log, …)
 │   ├── EmbeddingClient.hpp/cpp   — Gemini embeddings (OpenAI-compat, batched)
-│   ├── Ingestor.hpp/cpp          — curriculum → chunks → embeddings
-│   ├── TextChunker.hpp/cpp       — standalone chunking utility
+│   ├── Ingestor.hpp/cpp          — thin coordinator over the `ingest/` pipeline below
+│   ├── ingest/                   — curriculum ingestion split by responsibility
+│   │   ├── FileDiscovery.hpp/cpp     — walk + extension / kind filter
+│   │   ├── ContentFingerprint.hpp/cpp— FNV-1a over UTF-8-sanitised content
+│   │   ├── ChunkingStrategy.hpp/cpp  — `IChunker` Strategy + factory
+│   │   ├── ProseChunker.hpp/cpp      — `chunk_text`-based chunker
+│   │   ├── JsonlChunker.hpp/cpp      — line-boundary chunker for jsonl / json
+│   │   ├── EmbeddingBatcher.hpp/cpp  — batched embed + per-chunk fallback
+│   │   ├── DocumentPersister.hpp/cpp — build `DocumentRecord` + upsert
+│   │   └── ProgressReporter.hpp/cpp  — CLI progress + ETA lines
+│   ├── Vocabulary.hpp/cpp        — shared `normalise(word)` (lowercase alpha + apostrophe)
+│   ├── TextChunker.hpp/cpp       — standalone chunking utility (prose + lines)
 │   ├── RetrievalService.hpp/cpp  — vector search helpers
 │   ├── ProgressTracker.hpp/cpp   — per-user learning log (grammar + pronunciation)
 │   ├── EnglishTutorProcessor.*   — RAG + grammar correction pipeline
-│   ├── PronunciationDrillProcessor.hpp/cpp — sentence picker + scoring orchestrator
+│   ├── PronunciationDrillProcessor.hpp/cpp — thin coordinator for the drill pipeline
 │   ├── pronunciation/            — wav2vec2 + CTC forced alignment + GOP
 │   │   ├── PhonemeTypes.hpp      — shared data structs (Emissions, AlignSegment, …)
 │   │   ├── PhonemeVocab.hpp/cpp  — IPA ↔ id tokenizer (greedy longest-match)
 │   │   ├── PhonemeModel.hpp/cpp  — ONNX Runtime wrapper (optional: HECQUIN_WITH_ONNX)
 │   │   ├── G2P.hpp/cpp           — espeak-ng --ipa=3 → target phoneme ids
 │   │   ├── CtcAligner.hpp/cpp    — Viterbi forced alignment
-│   │   └── PronunciationScorer.hpp/cpp — logp → 0..100 per phoneme / word / overall
+│   │   ├── PronunciationScorer.hpp/cpp — logp → 0..100 per phoneme / word / overall
+│   │   └── drill/                — drill collaborators (each with a single responsibility)
+│   │       ├── DrillSentencePicker.hpp/cpp    — pool + phoneme index + spaced-repetition bias
+│   │       ├── DrillReferenceAudio.hpp/cpp    — Piper synth + LRU<PCM,contour> + SDL replay
+│   │       ├── DrillScoringPipeline.hpp/cpp   — Template Method: plan → align → score → intonation
+│   │       └── DrillProgressLogger.hpp/cpp    — per-phoneme JSON + ProgressTracker bridge
 │   ├── prosody/                  — local intonation pipeline
 │   │   ├── PitchTracker.hpp/cpp  — YIN F0 contour + per-frame RMS
 │   │   └── IntonationScorer.hpp/cpp — semitone DTW + final-direction rule
-│   └── cli/                      — `english_ingest`, `english_tutor`, `pronunciation_drill` entries
+│   └── cli/                      — `LearningApp` shared bootstrap + `english_ingest`, `english_tutor`, `pronunciation_drill` entries
 ├── actions/
-│   ├── ActionKind.hpp            — enum: None / LocalDevice / TopicSearch / Music / ExternalApi / AssistantSdk / GrammarCorrection / LessonModeToggle / PronunciationFeedback / DrillModeToggle
+│   ├── ActionKind.hpp            — enum: None / LocalDevice / TopicSearch / Music / ExternalApi / EnglishLesson / GrammarCorrection / LessonModeToggle / PronunciationFeedback / DrillModeToggle
 │   ├── Action.hpp                — {kind, reply, transcript}
 │   ├── DeviceAction.hpp          — power control confirmation text
 │   ├── ExternalApiAction.hpp     — wraps API response
@@ -113,12 +142,101 @@ src/
 │   └── NoneAction.hpp            — empty transcript guard
 ├── config/
 │   ├── ConfigStore.hpp/cpp       — dotenv loader (env vars take precedence)
-│   ├── AppConfig.hpp/cpp         — top-level config container
+│   ├── AppConfig.hpp/cpp         — top-level config container (`ai`, `audio`, `learning`, `pronunciation`, `locale`)
 │   └── ai/AiClientConfig.hpp/cpp — OpenAI-compatible HTTP client settings
 └── tts/
-    ├── PiperSpeech.hpp/cpp       — synthesize + play pipeline
+    ├── PiperSpeech.hpp/cpp       — thin facade (public C-style API unchanged)
+    ├── runtime/
+    │   └── PiperRuntime.hpp/cpp  — one-time `DYLD_FALLBACK_LIBRARY_PATH` configure
+    ├── wav/
+    │   └── WavReader.hpp/cpp     — generic 44-byte WAV reader (no Piper dependency)
+    ├── backend/                  — Strategy: synthesise text → int16 PCM
+    │   ├── IPiperBackend.hpp          — Strategy interface
+    │   ├── PiperSpawn.hpp/cpp         — Template Method: posix_spawn + pipe skeleton
+    │   ├── PiperPipeBackend.hpp/cpp   — primary: raw PCM over pipes
+    │   ├── PiperShellBackend.hpp/cpp  — legacy fallback: `echo | piper --output_file`
+    │   └── PiperFallbackBackend.hpp/cpp— composite (primary → fallback) + default factory
+    ├── playback/                 — SDL playback policies
+    │   ├── SdlAudioDevice.hpp/cpp     — open / close / state
+    │   ├── BufferedSdlPlayer.hpp/cpp  — pre-buffered one-shot playback
+    │   └── StreamingSdlPlayer.hpp/cpp — producer/consumer ring for low-latency stream
     └── cli/TextToSpeech.cpp      — text_to_speech executable entry point
 ```
+
+---
+
+## Design Patterns in Use
+
+The source layout above reflects a handful of explicit GoF patterns that each
+pay for themselves by keeping one responsibility per file and letting tests
+stub whole subsystems offline. The most load-bearing ones:
+
+### Strategy — pluggable TTS backends (`src/tts/backend/`)
+
+`IPiperBackend` is the interface (`synthesize(text, model) → int16 PCM + sample
+rate`). Concrete strategies:
+
+- `PiperPipeBackend` — primary, `posix_spawn` + stdin/stdout pipe, no disk I/O.
+- `PiperShellBackend` — legacy fallback, `echo | piper --output_file` + WAV read.
+- `PiperFallbackBackend` — composite: try primary, fall back on failure.
+
+`make_default_backend()` wires the default `Pipe → Shell` chain. The TTS
+facade (`tts/PiperSpeech.cpp`) just holds an `IPiperBackend` and never knows
+which concrete strategy answered — covered by
+`tests/test_piper_backend_fallback.cpp` with two stubbed backends.
+
+### Strategy — ingest chunking (`src/learning/ingest/`)
+
+`IChunker` + `make_chunker_for_extension("md" | "jsonl" | …)` route prose to
+`ProseChunker` (char-window with overlap) and structured line-oriented data to
+`JsonlChunker` (preserves object boundaries). The `Ingestor` coordinator picks
+one chunker per file and forwards; covered by
+`tests/test_ingest_chunking_strategy.cpp`.
+
+### Template Method — TTS process spawn skeleton (`tts/backend/PiperSpawn.*`)
+
+`PiperSpawn::run_pipe_synth` owns the fixed "spawn → write text → read samples
+→ collect stderr" skeleton. Individual backends only fill in the concrete
+executable path + args. This eliminates the ~80 LOC of `posix_spawn` +
+read/write-pipe boilerplate that used to be duplicated across three functions.
+
+### Template Method — drill scoring pipeline (`pronunciation/drill/DrillScoringPipeline.*`)
+
+Fixed outline: *plan → align → score → intonation → feedback*. Individual
+steps take injectable collaborators (`PhonemeModel`, `G2P`, `PronunciationScorer`,
+`IntonationScorer`) so tests can supply fakes while the overall shape stays
+identical.
+
+### Chain of Responsibility — utterance routing (`voice/UtteranceRouter.*`)
+
+One `route(Utterance)` call walks:
+
+1. `CommandProcessor::match_local` (fast regex, any mode)
+2. Drill callback (only while `ListenerMode::Drill`)
+3. Tutor callback (only while `ListenerMode::Lesson`)
+4. `CommandProcessor::process` (full chat round-trip)
+
+First handler to produce a non-empty `Action` wins. Covered by
+`tests/test_utterance_router.cpp` with stub callbacks and a canned
+`IHttpClient` behind the fallback.
+
+### Facade — thin coordinators over split collaborators
+
+`PiperSpeech` keeps the C-style public API (`piper_speak_and_play`, …) while
+delegating to backend + playback strategies; `PronunciationDrillProcessor`,
+`VoiceListener`, `Ingestor`, and `LearningStore` each stayed API-stable while
+their internals were broken into single-responsibility files. This is the
+escape hatch that let the refactor land without churning any call site.
+
+### RAII + single-connection invariant
+
+`AudioCapture::MuteGuard`, `WhisperEngine`'s `whisper_context` ownership,
+`StatementCache::CachedStmt`, and the SQLite `Transaction` helper all use
+RAII to keep "pause/resume", "open/close", and "prepare/finalise" symmetric.
+`LearningStore` owns the sole `sqlite3*` and passes it (plus its
+`StatementCache&`) to the per-aggregate `hecquin::learning::store::detail`
+free functions — explicit argument passing keeps the single-connection
+invariant visible in every call site.
 
 ---
 
@@ -126,16 +244,32 @@ src/
 
 ### AudioCapture
 
-Opens a microphone via SDL2 at 16 kHz, mono, float32. The device is selectable via `AUDIO_DEVICE_INDEX` in `config.env` (`-1` = system default). An SDL audio callback appends samples to a mutex-protected ring buffer. The main thread calls `snapshotBuffer()` for a thread-safe copy. During TTS playback, `pauseDevice()` / `resumeDevice()` prevent mic echo. `limitBufferSize()` trims the buffer to keep only the last N seconds.
+Opens a microphone via SDL2 at 16 kHz, mono, float32. The device is selectable via `AUDIO_DEVICE_INDEX` in `config.env` (`-1` = system default). An SDL audio callback appends samples to a mutex-protected ring buffer. For VAD polling the listener prefers `snapshotRecent(n, out)` which copies only the tail window the RMS gate inspects into a caller-owned buffer (no per-poll allocation); the full `snapshotBuffer()` copy is reserved for the utterance-close path that feeds Whisper and the drill PCM channel. During TTS playback, `pauseDevice()` / `resumeDevice()` prevent mic echo — the "pause → clear → speak → clear → resume" dance is wrapped in an `AudioCapture::MuteGuard` RAII helper used by `speakReply`, the drill announcer callback, and the pronunciation drill entry point. `limitBufferSize()` trims the buffer to keep only the last N seconds.
 
 ### VoiceListener
 
-The main listen loop:
+`VoiceListener` is a coordinator over four single-responsibility collaborators:
+
+- `UtteranceCollector` runs the 50 ms poll loop, keeps primary-VAD counters,
+  and produces a `CollectedUtterance { pcm, stats }` at silence close.
+- `SecondaryVadGate` is the pure `evaluate_secondary_gate(samples, voiced,
+  total, cfg)` function (still unit-tested by `test_voice_listener_vad.cpp`).
+- `UtteranceRouter` (Chain of Responsibility — see the pattern section above)
+  decides which handler runs: local intents → drill callback → tutor callback
+  → chat.
+- `TtsResponsePlayer` owns the TTS sanitisation regex set, the `MuteGuard`
+  wrap, and the actual Piper playback call.
+
+The listener itself just wires these together, owns the `ListenerMode` state
+machine, and emits `PipelineEvent`s into the optional sink. The high-level
+loop is still:
+
+
 
 ```
 every 50 ms:
-    samples = capture.snapshotBuffer()
-    rms     = sqrt(mean(samples[-512:]²))
+    capture.snapshotRecent(vad_window_samples, tail_buf)   # zero-alloc tail copy
+    rms     = sqrt(mean(tail_buf²))
 
     if rms > 0.02 and not collecting:
         collecting = true
@@ -147,20 +281,20 @@ every 50 ms:
         silence_ms   = has_voice ? 0 : silence_ms + 50
 
         if speech_ms >= 500 and silence_ms >= 800:
-            # Secondary gate: drop music / whispers / rustling that only
-            # briefly crossed the per-frame threshold.
-            voiced_ratio = voiced_frames / total_frames
-            utt_rms      = sqrt(mean(samples²))
-            if utt_rms < 0.015 or voiced_ratio < 0.35:
+            samples = capture.snapshotBuffer()             # full copy only on close
+            decision = VoiceListener::evaluate_secondary_gate(samples, voiced_frames,
+                                                              total_frames, cfg)
+            # decision.reason ∈ { accepted, too_quiet, too_sparse, both }
+            if not decision.accepted:
+                log::info("vad_gate", "outcome=rejected reason=" + decision.reason)
+                record_pipeline_event("vad_gate", "skipped", elapsed_ms, attrs)
                 clearBuffer(); continue
 
-            transcript = whisper.transcribe(samples)  # may return "" (noise)
+            transcript = whisper.transcribe(samples)       # may return "" (noise)
             if transcript is not empty:
-                future = commands.process_async(transcript)
-                action = future.get()
-                capture.pauseDevice()
-                piper_speak_and_play(action.reply)
-                capture.resumeDevice()
+                action = commands.process(transcript)      # direct synchronous call
+                { MuteGuard g(capture);
+                  piper_speak_and_play(action.reply);    } # scope resumes mic + clears buffer
             collecting = false
 
     capture.limitBufferSize(30s max, keep 10s)
@@ -182,51 +316,68 @@ Configuration (`VoiceListenerConfig`):
 ### WhisperEngine
 
 RAII wrapper around `whisper_context`. Loads a GGML model at construction.
-`transcribe()` runs greedy decoding on a float32 sample vector and returns
-joined segment text (language hard-coded to English). Three layers of
-noise/hallucination filtering run on the decoder output before it is handed
-back to the listener — `transcribe()` returns an empty string when any gate
-trips:
+`transcribe()` decodes a float32 sample vector and returns joined segment
+text. Behaviour is driven by `WhisperConfig`, populated from
+`HECQUIN_WHISPER_*` env vars (see `src/voice/WhisperEngine.hpp`):
+
+| Field              | Env var                         | Default                                        |
+|--------------------|---------------------------------|------------------------------------------------|
+| `language`         | `HECQUIN_WHISPER_LANGUAGE`      | `en` (falls back to `LocaleConfig::whisper_language`) |
+| `n_threads`        | `HECQUIN_WHISPER_THREADS`       | `max(2, hardware_concurrency() / 2)`           |
+| `beam_size`        | `HECQUIN_WHISPER_BEAM_SIZE`     | `0` (greedy; set ≥1 to enable beam search)     |
+| `no_speech_thold`  | `HECQUIN_WHISPER_NO_SPEECH`     | `0.6`                                          |
+| `min_alnum_chars`  | `HECQUIN_WHISPER_MIN_ALNUM`     | `2`                                            |
+| `suppress_segs`    | `HECQUIN_WHISPER_SUPPRESS_SEGS` | `0` (leaves per-segment stdout dumps disabled) |
+
+Three layers of noise / hallucination filtering run on the decoder output
+before it is handed back to the listener — `transcribe()` returns an empty
+string when any gate trips:
 
 1. **Decoder bias** — `suppress_blank`, `suppress_nst` (non-speech tokens),
-   `no_speech_thold = 0.6`, and `logprob_thold = -1.0` make Whisper itself
-   prefer to emit nothing when the audio is silence, music, or static.
+   `no_speech_thold` (configurable), and `logprob_thold = -1.0` make Whisper
+   itself prefer to emit nothing when the audio is silence, music, or static.
 2. **Pattern-based annotation stripper** — Whisper emits bracketed
    non-speech markers over noise/music (`[MUSIC]`, `[NOISE]`, `[SOUND]`,
    `[BLANK_AUDIO]`, `[Music playing]`, `(applause)`, `(laughter)` …). A
    single regex `\[[^\]\[]*\]|\([^\)\(]*\)` strips *any* such annotation
    (including future variants) from the decoded text. If the remainder is
-   empty — or has fewer than 2 alphanumeric characters — the utterance is
-   treated as noise and `transcribe()` returns an empty string. Otherwise
-   the stripped, trimmed text is returned (so a real sentence mixed with an
-   incidental `[Music]` still comes through, cleaned).
-3. **No-speech-probability gate** — even if the text looks speech-shaped,
-   any segment whose `whisper_full_get_segment_no_speech_prob()` exceeds
-   0.6 causes the whole utterance to be rejected, defending against
-   hallucinated words on ambient noise.
+   empty — or has fewer than `min_alnum_chars` alphanumeric characters — the
+   utterance is treated as noise and `transcribe()` returns an empty string.
+3. **No-speech-probability gate** — any segment whose
+   `whisper_full_get_segment_no_speech_prob()` exceeds `no_speech_thold`
+   causes the whole utterance to be rejected.
 
 ### CommandProcessor
 
 A thin façade composing two collaborators, seeded from `AiClientConfig`:
 
 1. **`LocalIntentMatcher`** (`src/ai/LocalIntentMatcher.*`) — regex matching on the
-   normalized (lowercase, trimmed) transcript. Returns a `std::optional<ActionMatch>`
-   so callers can distinguish "no match" from an empty reply:
+   normalized (lowercase, trimmed) transcript. Patterns come from
+   `AppConfig::learning` (`lesson_*_phrases`, `drill_*_phrases`) and the
+   matcher's own built-in set for device / story / music intents — the
+   single source of truth for phrase lists is `AppConfig`. Returns a
+   `std::optional<ActionMatch>` so callers can distinguish "no match" from
+   an empty reply; the matched `ActionKind` rides on the result so the
+   listener never re-runs the same regex to decide which toggle fired:
    - `turn on|turn off` + `air|switch` → `ActionKind::LocalDevice`
    - `tell me a story` → `ActionKind::InteractionTopicSearch`
    - `open music` → `ActionKind::InteractionMusicSearch`
-   - lesson-mode toggles → `ActionKind::LessonModeToggle`
+   - lesson toggles → `ActionKind::LessonModeToggle`
+   - drill toggles → `ActionKind::DrillModeToggle`
 
 2. **`ChatClient`** (`src/ai/ChatClient.*`) — remote LLM call against an
    OpenAI-compatible `/chat/completions` endpoint. JSON is built with
-   **nlohmann/json**; transport is delegated to an **`IHttpClient`** reference
-   (default `CurlHttpClient`, injectable for tests). On failure (missing API
-   key, transport error, non-2xx HTTP status, unparseable body) `ask()`
-   returns an `ExternalApiAction` carrying a **short, user-friendly spoken
-   reply** (mapped per status bucket: auth / not-found / timeout / busy /
-   server / parse) while the raw response body, URL, and status code are
-   logged to `stderr`. This keeps Piper from reading multi-kilobyte JSON
-   error payloads aloud while preserving full diagnostics for operators.
+   **nlohmann/json**; transport is delegated to an **`IHttpClient`** reference.
+   In production it is a `RetryingHttpClient` → `LoggingHttpClient` →
+   `CurlHttpClient` chain (backoff for 5xx / 429 / transport failures with
+   exponential delay, then telemetry, then libcurl). Tests pass a `FakeHttp`
+   directly. On terminal failure (missing API key, permanent transport
+   error, non-2xx that exhausted retries, unparseable body) `ask()` returns
+   an `ExternalApiAction` carrying a **short, user-friendly spoken reply**
+   (mapped per status bucket: auth / not-found / timeout / busy / server /
+   parse) while the raw response body, URL, and status code are logged via
+   `hecquin::log`. This keeps Piper from reading multi-kilobyte JSON error
+   payloads aloud while preserving full diagnostics for operators.
 
 `CommandProcessor::process()` / `process_async()` try the local matcher first,
 then fall back to `ChatClient::ask()`. The system prompt is loaded at startup
@@ -298,21 +449,49 @@ any structural / type mismatch. No hand-rolled scanning.
 
 ### PiperSpeech
 
-Three-step pipeline:
+`src/tts/PiperSpeech.*` is a thin facade over the split layout under `tts/`.
+The public C-style entry points (`piper_speak_and_play`,
+`piper_speak_and_play_streaming`, `piper_synthesize_to_buffer`) stay intact
+so every caller (`VoiceListener::TtsResponsePlayer`,
+`DrillReferenceAudio`, the `text_to_speech` CLI) is unchanged. Under the
+hood:
+
+- `tts/backend/` — `IPiperBackend` Strategy with `PiperPipeBackend` (primary,
+  posix_spawn + pipes), `PiperShellBackend` (legacy shell fallback), and
+  `PiperFallbackBackend` (composite); both backends share the
+  `PiperSpawn` Template Method so the spawn / write-stdin / read-stdout
+  plumbing lives in one place.
+- `tts/playback/` — `SdlAudioDevice` (lifecycle), `BufferedSdlPlayer`
+  (pre-buffered one-shot), and `StreamingSdlPlayer` (producer/consumer
+  ring that starts playback as soon as the first chunk arrives).
+- `tts/runtime/PiperRuntime` — one-time `DYLD_FALLBACK_LIBRARY_PATH`
+  configure for the bundled Piper shared libraries on macOS.
+- `tts/wav/WavReader` — generic 44-byte WAV reader, promoted out of the
+  public header so it no longer leaks as part of the Piper API.
+
+Two synthesis backends feed the same streaming SDL2 playback:
 
 ```
-piper_speak_and_play(text, model):
-    1. piper_synthesize_wav(text, model, /tmp/hecquin_tts_*.wav)
-           — shell: echo "text" | piper --model ... --output_file ...
-           — sets DYLD_LIBRARY_PATH for macOS espeak-ng
-    2. samples = wav_read_s16_mono(wav_file)
-           — reads 44-byte WAV header, loads 16-bit PCM samples
-    3. sdl_play_s16_mono_22k(samples)
+piper_speak_and_play_streaming(text, model):
+    1. synthesise — one of:
+         (a) piper_synthesize_to_buffer(text, model) → int16 PCM     (used by drill;
+             preferred path when the in-process API is available)
+         (b) persistent `piper --stdin` subprocess: pipe text, read a streamed
+             WAV on stdout                                            (fallback)
+         (c) legacy `echo "text" | piper --output_file /tmp/...wav` shell pipe
+             (retained for environments where stdin mode is unavailable)
+    2. sdl_play_s16_mono_22k_streaming(pcm_producer)
            — opens SDL2 playback device at 22050 Hz if not already open
-           — SDL callback feeds samples as playback progresses
-           — polls until all samples consumed
-    4. remove(wav_file)
+           — producer/consumer ring: playback starts as soon as the first
+             chunk arrives, so long replies don't stall the mic re-open
+           — SDL callback drains chunks until EOF is signalled
 ```
+
+Path (a) is used for every drill utterance (we already need the raw PCM to
+compute the reference pitch contour) and for all cached replays from the
+`PronunciationDrillProcessor` LRU (keyed by `std::hash<string>{}(text)`:
+8 entries of `{PCM, reference_contour}`). Paths (b)/(c) avoid the
+per-utterance shell fork/exec cost on the assistant / tutor reply path.
 
 ---
 
@@ -325,7 +504,7 @@ piper_speak_and_play(text, model):
 | `InteractionTopicSearch` | Story regex match | User prompt text |
 | `InteractionMusicSearch` | Music regex match | User prompt text |
 | `ExternalApi` | HTTP API call | API assistant reply |
-| `AssistantSdk` | (reserved) | — |
+| `EnglishLesson` | (reserved — lesson-mode cue) | — |
 | `GrammarCorrection` | `EnglishTutorProcessor` (Lesson mode) | "You said … / Better … / Reason …" |
 | `LessonModeToggle` | Lesson start/end regex match | Short confirmation; flips `ListenerMode` |
 | `PronunciationFeedback` | `PronunciationDrillProcessor` | Overall score + weakest word/phoneme + intonation note; next sentence announced after playback |
@@ -338,11 +517,15 @@ piper_speak_and_play(text, model):
 | Thread | Role |
 |---|---|
 | SDL audio callback | Appends mic samples to buffer under mutex |
-| Main thread | Polls buffer, runs VAD, calls Whisper, drives TTS |
-| `std::async` worker | Executes HTTP API call when no local match |
-| SDL playback callback | Reads PCM samples from vector during playback |
+| Main thread | Polls buffer, runs VAD, calls Whisper, runs `CommandProcessor::process` synchronously, drives TTS |
+| Piper persistent subprocess (optional) | Long-lived `piper --stdin` process; consumes text lines, emits WAV on stdout |
+| SDL playback callback | Pulls PCM chunks from the streaming ring during playback |
 
 All shared buffer access is guarded by `std::mutex` + `std::lock_guard`.
+The earlier `std::async` worker that executed one HTTP call per utterance
+has been removed — routing is back to a plain synchronous call because the
+phantom future was always immediately joined (see enhancement roadmap,
+item 1).
 
 ---
 
@@ -366,7 +549,7 @@ CMake modular structure under `cmake/`:
 | `english_tutor.cmake` | `english_ingest` + `english_tutor` executables |
 | `pronunciation_drill.cmake` | `pronunciation_drill` executable |
 | `piper_speech.cmake` | `hecquin_piper_speech` static library |
-| `sound_tests.cmake` | CTest unit tests (`openai_chat`, `local_intent`, `embedding_json`, `text_chunker`, `config_store`, `learning_store`, `phoneme_vocab`, `ctc_aligner`, `pronunciation_scorer`, `pitch_tracker`, `intonation_scorer`) |
+| `sound_tests.cmake` | CTest unit tests (`openai_chat`, `utf8`, `local_intent`, `net_retry`, `voice_listener_vad`, `embedding_json`, `text_chunker`, `config_store`, `learning_store`, `phoneme_vocab`, `ctc_aligner`, `pronunciation_scorer`, `pitch_tracker`, `intonation_scorer`, `pronunciation_drill`, `english_tutor_processor`) — 16 tests, run via `ctest --output-on-failure` |
 
 Key preprocessor defines set by CMake:
 
@@ -439,13 +622,18 @@ EnglishTutorProcessor.process
 GrammarCorrectionAction.to_reply() → TTS
 ```
 
-### SQLite schema (learning DB, v2)
+### SQLite schema (learning DB, v3)
 
-`LearningStore::kSchemaVersion == 2`. All migrations are idempotent
+`LearningStore::kSchemaVersion == 3`. All migrations are idempotent
 (`CREATE … IF NOT EXISTS`), stamped into `kv_metadata(schema_version)` on the
 very first open and never downgraded afterwards. The table cluster is written
 by different translation units under `src/learning/store/` — all sharing the
 same class and DB file.
+
+Hot-path statements are cached per connection in a `detail::StatementCache`
+(keyed by opaque tag such as `"topk.vec"`, `"pipeline_events.record"`): every
+call hits `sqlite3_reset` + rebind instead of re-preparing the SQL text,
+which is ~10× cheaper for these short queries.
 
 | Table                     | Written by (`src/learning/store/…`)                              | Columns                                                   |
 |---------------------------|------------------------------------------------------------------|-----------------------------------------------------------|
@@ -460,9 +648,15 @@ same class and DB file.
 | `phoneme_mastery`         | `LearningStorePronunciation.cpp`                                 | `ipa PRIMARY KEY, attempts, avg_score, last_seen_at`      |
 | `api_calls` **(v2)**      | `LearningStoreApiCalls.cpp` (via `LoggingHttpClient` sink)       | `id, ts, provider, endpoint, method, status, latency_ms, request_bytes, response_bytes, ok, error` |
 | `request_logs` **(v2)**   | Python `dashboard/` middleware                                   | `id, ts, path, method, status, latency_ms, remote_ip, user_agent` |
+| `pipeline_events` **(v3)**| `LearningStoreApiCalls.cpp` (shared `ApiCallSink` mechanism)     | `id, ts, event, outcome, duration_ms, attrs_json` — VAD gate decisions, Whisper latency + p(no_speech), drill alignment ok/fail, Piper synth ms |
 
-Indexes on `api_calls(ts)`, `api_calls(provider, ts)`, and `request_logs(ts)`
-keep the dashboard's per-day aggregations cheap.
+Indexes on `api_calls(ts)`, `api_calls(provider, ts)`, `request_logs(ts)`,
+`pipeline_events(ts)`, and `pipeline_events(event, ts)` keep the dashboard's
+per-day aggregations cheap.
+
+`pipeline_events` is append-only and intentionally schemaless in its
+`attrs_json` payload: a new metric can be added (e.g. `drill_alignment.ok=1,
+segments=42`) without another migration.
 
 If `sqlite-vec` cannot be downloaded at configure time, `LearningStore` transparently
 falls back to a BLOB-backed table and a C++ brute-force cosine scan — the rest of the
@@ -504,15 +698,22 @@ that don't care about telemetry.
 
 `scripts/fetch_curriculum.sh` pulls public datasets into
 `.env/shared/learning/curriculum/{vocabulary,grammar,dictionary,readers}/`. The
-`english_ingest` binary then:
+`english_ingest` binary then runs the `Ingestor` coordinator, which delegates
+to the per-responsibility helpers under `src/learning/ingest/`:
 
-1. Lists every text file under `curriculum/` and `custom/`.
-2. Computes an FNV-1a-based content fingerprint and skips already-ingested files
-   (stored in `ingested_files`), unless `--rebuild` is passed.
-3. Splits each file into ~1800-character chunks with a 200-character overlap,
-   preferring whitespace breaks.
-4. Embeds each chunk via `EmbeddingClient::embed`.
-5. Upserts `documents` + `vec_documents` and records the file hash.
+1. `FileDiscovery::collect_files` lists every text file under `curriculum/`
+   and `custom/`, tagging each with a `kind` and filtering by extension.
+2. `ContentFingerprint` computes an FNV-1a-based hash; already-ingested files
+   (via `LearningStore::is_file_already_ingested`) are skipped unless
+   `--rebuild` is passed.
+3. `make_chunker_for_extension` (Strategy) picks `JsonlChunker` for jsonl/json
+   and `ProseChunker` otherwise. Prose splits into ~1800-char chunks with a
+   200-char overlap; JSONL preserves object boundaries.
+4. `EmbeddingBatcher` batches chunks through `EmbeddingClient::embed_many`
+   with per-chunk single-embed fallback for partial failures.
+5. `DocumentPersister` builds each `DocumentRecord` and upserts `documents`
+   + `vec_documents`; `ProgressReporter` prints per-file progress and ETA.
+6. `LearningStore::record_ingested_file` writes the file hash on success.
 
 ### Configuration additions
 
@@ -571,9 +772,37 @@ user speech (captured in Drill mode)
 ```
 
 The resulting `PronunciationFeedbackAction` carries the overall score, the
-weakest word + phoneme, an intonation note, and a flag for the "next sentence"
+weakest `PronunciationDrillConfig::max_feedback_words` words + phonemes (2 by
+default), an intonation note, and a flag for the "next sentence"
 announcement. After `VoiceListener` speaks the feedback, it invokes the queued
 `drill_announce_cb_` to play the next target.
+
+#### Sentence picker (spaced repetition)
+
+`PronunciationDrillProcessor::next_sentence_` is no longer a one-shot shuffle.
+At load time the processor runs G2P over the whole pool once and builds a
+phoneme → sentence-ids index. Each pick queries
+`LearningStore::weakest_phonemes(n)` — a small window on `phoneme_mastery`
+(lowest `avg_score`, then oldest `last_seen_at`) — and biases the next draw
+toward sentences whose IPA plan contains those phonemes, with a small epsilon
+chance of a plain rotation so the learner still sees variety.
+
+#### Reference contour / PCM cache
+
+The reference PCM + YIN pitch contour for each sentence is memoised in a
+tiny LRU keyed by `std::hash<std::string>{}(text)` (8 entries). Repeats and
+rotate-backs replay cached audio without re-shelling Piper or re-running YIN,
+saving ~200–500 ms per repeat.
+
+#### Per-phoneme score calibration
+
+`PronunciationScorerConfig::per_phoneme` is an IPA → `{min_logp, max_logp}`
+map that overrides the global 0..100 anchors when a phoneme is present.
+Nasals and fricatives routinely post lower log-posteriors even when
+articulated correctly, and a single global floor under-scores them. Overrides
+are loaded lazily from `.env/shared/models/pronunciation/calibration.json`
+(path configurable via `HECQUIN_PRONUNCIATION_CALIBRATION`); a missing or
+malformed file is silently ignored.
 
 ### Data structures (see `src/learning/pronunciation/PhonemeTypes.hpp`)
 
@@ -592,8 +821,8 @@ announcement. After `VoiceListener` speaks the feedback, it invokes the queued
 ### Progress schema additions
 
 The drill writes to `pronunciation_attempts` and `phoneme_mastery` — both now
-part of the shared v2 schema (see **English Tutor Subsystem → SQLite schema
-(learning DB, v2)** for the exhaustive column list). Implementation lives in
+part of the shared v3 schema (see **English Tutor Subsystem → SQLite schema
+(learning DB, v3)** for the exhaustive column list). Implementation lives in
 `LearningStorePronunciation.cpp`, so adding a new column only touches that one
 translation unit and `LearningStoreMigrations.cpp`.
 
@@ -616,3 +845,123 @@ All `HECQUIN_DRILL_*`, `HECQUIN_PRONUNCIATION_*`, and `HECQUIN_ONNX_PROVIDER` ke
 are documented in [`README.md → English Tutor Mode → Configuration knobs`](./README.md#configuration-knobs-envconfigenv).
 `PronunciationDrillProcessor` reads these through `AppConfig` at startup — no runtime
 reconfiguration.
+
+---
+
+## Observability
+
+The sound module uses a single in-process structured logger at
+`src/observability/Log.hpp` — `hecquin::log::info/warn/error(tag, fmt, …)`
+and `hecquin::log::kv(level, tag, msg, {kv…})`. Output is pretty one-line
+by default and switches to JSON Lines when `HECQUIN_LOG_FORMAT=json`, so the
+dashboard or a log-scraper can ingest without regex gymnastics. Level is
+controlled by `HECQUIN_LOG_LEVEL` (`debug|info|warn|error`, default `info`).
+
+On top of logs, stage-level latencies and outcomes are recorded into the
+`pipeline_events` table (see schema section) via the same `ApiCallSink`
+mechanism the HTTP decorator uses:
+
+| `event`          | Written by                                | `outcome`       | `attrs_json` highlights                                     |
+|------------------|-------------------------------------------|-----------------|-------------------------------------------------------------|
+| `vad_gate`       | `VoiceListener::run`                      | `ok` / `skipped`| `reason` (`accepted`, `too_quiet`, `too_sparse`, `both`), `rms`, `voiced_ratio` |
+| `whisper`        | `WhisperEngine::transcribe`               | `ok` / `error`  | `latency_ms`, `no_speech`, `chars`                          |
+| `piper_synth`    | `PiperSpeech` synth paths                 | `ok` / `error`  | `backend` (`buffer` / `stdin` / `shell`), `latency_ms`, `bytes` |
+| `drill_align`    | `PronunciationDrillProcessor::score`      | `ok` / `skipped`| `segments`, `phonemes`, `overall_0_100`                     |
+| `drill_pick`     | `PronunciationDrillProcessor::pick_and_announce` | `ok`     | `source` (`spaced_repetition` / `rotation`), `target_phoneme` |
+
+Because the sink is bound at the executable entry points (same pattern as
+`api_calls`), voice-only executables and unit tests can skip the sink and
+the rest of the pipeline keeps its existing contract.
+
+---
+
+## Multi-locale plumbing
+
+`AppConfig::locale` (`LocaleConfig`) exposes three locale strings:
+
+| Field              | Consumed by                                             | Env override              | Default   |
+|--------------------|---------------------------------------------------------|---------------------------|-----------|
+| `ui`               | Prompt file lookup (`<prompts_dir>/<ui>/…`), fallback to default | `HECQUIN_LOCALE`     | `en-US`   |
+| `whisper_language` | `WhisperEngine::transcribe` (whisper `language` param)  | `HECQUIN_WHISPER_LANGUAGE`| `en`      |
+| `espeak_voice`     | `G2P::phonemize` (`espeak-ng --voice=…`)                | `HECQUIN_ESPEAK_VOICE`    | `en-us`   |
+
+All three default to English and current builds are bit-for-bit compatible
+with the previous locale-free behaviour; the plumbing is there so a future
+non-English voice stack can be wired without touching every subsystem.
+
+---
+
+## Testing
+
+The test suite is a set of small assertion-based `main()` programs under
+`sound/tests/` — no gtest / Catch2 dependency. Each binary is registered
+through `hecquin_add_unit_test` in `sound/cmake/sound_tests.cmake`, links
+directly against the narrow static libs in `sound/cmake/sound_libs.cmake`
+(so the same `.cpp` is never recompiled per test), and is driven by
+`ctest --output-on-failure` after a normal build.
+
+Tests that need SQLite are guarded by `if (HECQUIN_HAS_SQLITE)` so the
+suite still runs on minimal build boxes.
+
+### What each test covers
+
+| Area | Test | What it asserts |
+|---|---|---|
+| **AI / HTTP** | `test_openai_chat_content` | `choices[0].message.content` extraction round-trip on canned OpenAI / Gemini-compat JSON. |
+| | `test_local_intent_matcher` | Full regex matrix for device / story / music / lesson / drill intents; enable-bit is set correctly on toggles. |
+| | `test_retrying_http` | Exponential backoff + transient-classification (5xx, 429, transport) without linking libcurl / libssl. |
+| **Voice** | `test_voice_listener_vad` | `SecondaryVadGate::evaluate_secondary_gate` reasons — `too_quiet`, `too_sparse`, `both`, `accepted`. |
+| | `test_utterance_router` | Chain of Responsibility ordering: local-intent → drill → tutor → chat fallback, plus null-callback safety. Uses a stub `IHttpClient` for the fallback branch. |
+| **TTS** | `test_piper_backend_fallback` | `PiperFallbackBackend` strategy composition: primary-wins, fallback-wins, both-fail (outputs cleared), null-primary safety. No real Piper. |
+| **Learning / store** | `test_learning_store` | SQLite open + schema migration + document upsert + vector retrieval round-trip. |
+| | `test_config_store` | `.env` parsing, env-var overrides, quoted values. |
+| | `test_utf8` | `sanitize_utf8` preserves valid multi-byte UTF-8, drops CP-1252 0xA0, replaces overlong sequences with U+FFFD. |
+| **Learning / ingest** | `test_embedding_client_json` | `EmbeddingClient` ↔ fake HTTP round-trip (batch + single). |
+| | `test_text_chunker` | Prose chunker boundary behaviour (budget, overlap, whitespace preference). |
+| | `test_ingest_chunking_strategy` | `make_chunker_for_extension` dispatch (jsonl/json → line-based; prose → char-window) + per-chunker invariants. |
+| | `test_content_fingerprint` | FNV-1a determinism + whitespace / byte / length sensitivity. |
+| **Pronunciation** | `test_phoneme_vocab` | Greedy longest-match IPA → id tokenisation. |
+| | `test_ctc_aligner` | Viterbi forced alignment on a hand-crafted trellis; backpointer correctness + partial-alignment fallback. |
+| | `test_pronunciation_scorer` | logp → 0..100 mapping, per-phoneme / word / overall aggregation, calibration anchors. |
+| **Prosody** | `test_pitch_tracker` | YIN on synthetic sine waves; voiced vs unvoiced frame classification. |
+| | `test_intonation_scorer` | Semitone DTW + final-direction rule (rising / falling / flat) across reference vs candidate contours. |
+| **Drill / tutor** | `test_pronunciation_drill` | End-to-end drill processor with fake emissions + injected plan (no espeak-ng / onnxruntime / Piper). |
+| | `test_drill_sentence_picker` | Round-robin picker when no store / G2P; `load()` resets cursor; empty-pool safety. |
+| | `test_drill_reference_audio_lru` | LRU insert / lookup / eviction, MRU bump on hit, `cache_size == 0` disables. Exercised through `*_for_test` hooks so Piper / SDL never run. |
+| | `test_english_tutor_processor` | RAG context truncation + three-line reply parsing; `short_reply_for_status` wiring on non-2xx responses. Real `LearningStore` in `/tmp`, fake HTTP for both embed + chat. |
+
+### Conventions
+
+- Every new file that represents a behavioural unit gets a matching
+  `tests/test_*.cpp`. Keep the assertion style in line with `test_utf8.cpp`
+  (free `expect_*` helpers, `std::exit(1)` on first mismatch, all-passed
+  log at the end).
+- Tests must run offline. For anything that would otherwise touch network
+  or spawn a subprocess, inject an `IHttpClient` / `IPiperBackend` stub or
+  reach for the `*_for_test` hook on the collaborator.
+- Heavy dependencies (SQLite, Piper, onnxruntime) are gated behind
+  `HECQUIN_HAS_SQLITE` etc. so the smaller tests still build and pass in
+  environments without those packages.
+
+---
+
+## CI, formatting, and hooks
+
+- `.github/workflows/sound.yml` runs `build-and-test` on `ubuntu-latest` and `macos-latest` (system deps → whisper.cpp clone + build → CMake configure → build → `ctest --output-on-failure`). Build logs are uploaded as an artefact on failure. A companion `lint` job runs `clang-format --dry-run` on changed files (blocking) and `clang-tidy` on the full `src/` tree (report-only, `continue-on-error: true`, ratcheting planned).
+- `sound/.clang-format` is a Google-flavoured style with 100-column lines, 4-space indent, left-aligned pointers, and include sorting disabled so existing include groups aren't reshuffled.
+- `sound/.clang-tidy` enables a conservative set of `bugprone-*`, `cert-*`, `clang-analyzer-*`, `modernize-*`, `performance-*`, and `readability-*` checks (with the noisiest ones disabled) and reuses `.clang-format` for fix formatting.
+- `sound/scripts/pre-commit.sh` runs `clang-format -i` on staged `*.{c,cc,cpp,h,hpp}` paths under `sound/` and re-stages them. Install via `./dev.sh hooks:install` (symlinks the script into `.git/hooks/pre-commit`).
+
+---
+
+## CLI bootstrap (`LearningApp`)
+
+`EnglishTutorMain.cpp` and `PronunciationDrillMain.cpp` both delegate their
+shared setup — `VoiceApp` init, pronunciation path resolution,
+`LearningStore` open + migrations, `ProgressTracker` wiring, base
+`PronunciationDrillProcessor` construction, `LocalIntentMatcher` config, and
+`pipeline_events` sink binding — to a single `hecquin::learning::cli::LearningApp`
+helper. Only the mode-specific glue stays in each `main()`:
+
+- `english_tutor` installs a `TutorCallback` backed by `EnglishTutorProcessor`.
+- `pronunciation_drill` forces the listener into `Drill` mode and installs a `DrillCallback`.

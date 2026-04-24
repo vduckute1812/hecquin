@@ -8,14 +8,19 @@
 using hecquin::ai::CurlHttpClient;
 using hecquin::common::trim_copy;
 
-CommandProcessor::CommandProcessor(AiClientConfig config)
+CommandProcessor::CommandProcessor(AiClientConfig config,
+                                   hecquin::ai::LocalIntentMatcherConfig matcher_cfg)
     : config_(std::move(config)),
+      matcher_(std::move(matcher_cfg)),
       owned_http_(std::make_unique<CurlHttpClient>()),
       http_(*owned_http_),
       chat_(config_, http_) {}
 
-CommandProcessor::CommandProcessor(AiClientConfig config, hecquin::ai::IHttpClient& http)
+CommandProcessor::CommandProcessor(AiClientConfig config,
+                                   hecquin::ai::IHttpClient& http,
+                                   hecquin::ai::LocalIntentMatcherConfig matcher_cfg)
     : config_(std::move(config)),
+      matcher_(std::move(matcher_cfg)),
       owned_http_(nullptr),
       http_(http),
       chat_(config_, http_) {}

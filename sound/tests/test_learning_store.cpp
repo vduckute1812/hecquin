@@ -106,6 +106,51 @@ int main() {
         }
     }
 
+    // weakest_phonemes: ranks by avg_score ascending, filters by min_attempts.
+    {
+        LearningStore store(db, dim);
+        if (!store.open()) {
+            std::remove(db.c_str());
+            return fail("open for mastery ranking");
+        }
+        // "θ" very weak, observed 3x; "s" mediocre, 2x; "ɑ" decent, 1x only →
+        // should be filtered out by min_attempts=2.
+        store.touch_phoneme_mastery({{"θ", 10.0f}, {"s", 55.0f}, {"ɑ", 90.0f}});
+        store.touch_phoneme_mastery({{"θ", 12.0f}, {"s", 60.0f}});
+        store.touch_phoneme_mastery({{"θ", 15.0f}});
+
+        const auto weak = store.weakest_phonemes(/*n=*/5, /*min_attempts=*/2);
+        if (weak.size() != 2) {
+            std::remove(db.c_str());
+            return fail("weakest_phonemes should return exactly two rows");
+        }
+        if (weak[0] != "θ" || weak[1] != "s") {
+            std::remove(db.c_str());
+            return fail("weakest_phonemes should sort by avg_score ascending");
+        }
+
+        // limit argument honoured.
+        const auto top1 = store.weakest_phonemes(1, 2);
+        if (top1.size() != 1 || top1[0] != "θ") {
+            std::remove(db.c_str());
+            return fail("weakest_phonemes(1) should return only the worst");
+        }
+    }
+
+    // pipeline_events: round-trip one VAD skip and one Whisper ok.
+    {
+        LearningStore store(db, dim);
+        if (!store.open()) {
+            std::remove(db.c_str());
+            return fail("open for pipeline_events");
+        }
+        store.record_pipeline_event("vad_gate", "skipped", 420,
+                                    R"({"reason":"too_quiet"})");
+        store.record_pipeline_event("whisper", "ok", 140, "");
+        // There is no direct reader yet, but the insert must not crash and
+        // must survive another open.
+    }
+
     std::remove(db.c_str());
     return 0;
 }

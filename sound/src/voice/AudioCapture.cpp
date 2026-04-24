@@ -90,6 +90,23 @@ std::vector<float> AudioCapture::snapshotBuffer() const {
     return buffer_;
 }
 
+std::size_t AudioCapture::snapshotRecent(std::size_t max_samples,
+                                         std::vector<float>& out) const {
+    std::lock_guard<std::mutex> lock(buffer_mutex_);
+    const std::size_t n = std::min(max_samples, buffer_.size());
+    out.resize(n);
+    if (n == 0) return 0;
+    // Copy the last `n` samples (the window VAD actually inspects).
+    const auto begin = buffer_.end() - static_cast<std::ptrdiff_t>(n);
+    std::copy(begin, buffer_.end(), out.begin());
+    return n;
+}
+
+std::size_t AudioCapture::bufferSize() const {
+    std::lock_guard<std::mutex> lock(buffer_mutex_);
+    return buffer_.size();
+}
+
 void AudioCapture::limitBufferSize(int max_seconds, int keep_seconds) {
     const size_t max_samples = static_cast<size_t>(cfg_.sample_rate * max_seconds);
     std::lock_guard<std::mutex> lock(buffer_mutex_);

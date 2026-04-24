@@ -21,10 +21,13 @@
  */
 class CommandProcessor {
 public:
-    explicit CommandProcessor(AiClientConfig config = AiClientConfig::from_default_config());
+    explicit CommandProcessor(AiClientConfig config = AiClientConfig::from_default_config(),
+                              hecquin::ai::LocalIntentMatcherConfig matcher_cfg = {});
 
     /** Inject a specific HTTP client (e.g. a fake in tests). */
-    CommandProcessor(AiClientConfig config, hecquin::ai::IHttpClient& http);
+    CommandProcessor(AiClientConfig config,
+                     hecquin::ai::IHttpClient& http,
+                     hecquin::ai::LocalIntentMatcherConfig matcher_cfg = {});
 
     /** Full pipeline: fast local regex, then external chat API. */
     Action process(const std::string& transcript);

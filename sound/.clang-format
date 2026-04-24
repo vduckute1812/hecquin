@@ -1,0 +1,27 @@
+# clang-format configuration for the sound module.
+# Based on Google with the handful of overrides we already rely on:
+#   * 100-column lines (matches the bulk of existing code).
+#   * 4-space indentation (consistent with the majority of touched files).
+#   * Never sort includes automatically — several files rely on platform
+#     headers coming after the module's own (e.g. `<spawn.h>` after
+#     `<cstdio>` in `PiperSpeech.cpp`).
+#   * Keep pointer-alignment left (`T* x`, not `T *x`) to match the codebase.
+BasedOnStyle: Google
+IndentWidth: 4
+ColumnLimit: 100
+AccessModifierOffset: -4
+PointerAlignment: Left
+DerivePointerAlignment: false
+SortIncludes: CaseSensitive
+SortUsingDeclarations: true
+AlignAfterOpenBracket: Align
+AllowShortFunctionsOnASingleLine: Inline
+AllowShortIfStatementsOnASingleLine: WithoutElse
+AllowShortLambdasOnASingleLine: All
+BreakBeforeBraces: Attach
+BreakConstructorInitializers: BeforeColon
+SpaceAfterCStyleCast: true
+FixNamespaceComments: true
+---
+Language: Cpp
+Standard: c++17

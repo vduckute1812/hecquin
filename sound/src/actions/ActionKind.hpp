@@ -7,7 +7,6 @@ enum class ActionKind {
     InteractionTopicSearch,
     InteractionMusicSearch,
     ExternalApi,
-    AssistantSdk,
     EnglishLesson,
     LessonModeToggle,
     PronunciationFeedback,

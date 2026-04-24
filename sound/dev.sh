@@ -63,6 +63,8 @@ Usage:
   ./dev.sh pronunciation:drill [args...]    Run the prompted pronunciation / intonation drill
   ./dev.sh env:info              Show current environment info
   ./dev.sh env:clean [platform]  Clean build artifacts
+  ./dev.sh fmt [paths...]        Run clang-format on staged / all C++ sources
+  ./dev.sh hooks:install         Install the sound/ pre-commit hook into .git/hooks/
 
 Environment:
   Set HECQUIN_ENV=dev|prod to override auto-detection
@@ -118,6 +120,8 @@ case "$cmd" in
   pronunciation:drill) shift || true; cmd_pronunciation_drill "$@" ;;
   env:info) cmd_env_info ;;
   env:clean) cmd_env_clean "$arg" ;;
+  fmt) cmd_fmt "$@" ;;
+  hooks:install) cmd_hooks_install ;;
 
   *)
     usage

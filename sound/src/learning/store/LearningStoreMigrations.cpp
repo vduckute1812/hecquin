@@ -122,6 +122,23 @@ bool LearningStore::run_migrations_() {
     if (!exec_("CREATE INDEX IF NOT EXISTS idx_request_logs_ts ON request_logs(ts);"))
         return false;
 
+    // --- v3: per-stage voice pipeline events (VAD / Whisper / Piper / drill).
+    // Rows are cheap and append-only; the dashboard rolls them up.  Each
+    // event carries an opaque JSON payload so schema survives scoring /
+    // VAD knob churn without another migration.
+    if (!exec_("CREATE TABLE IF NOT EXISTS pipeline_events ("
+               "  id INTEGER PRIMARY KEY AUTOINCREMENT,"
+               "  ts INTEGER NOT NULL,"
+               "  event TEXT NOT NULL,"         // "vad_gate", "whisper", "piper", ...
+               "  outcome TEXT NOT NULL,"       // "ok" | "skipped" | "error"
+               "  duration_ms INTEGER NOT NULL DEFAULT 0,"
+               "  attrs_json TEXT DEFAULT '{}'"
+               ");")) return false;
+    if (!exec_("CREATE INDEX IF NOT EXISTS idx_pipeline_events_ts ON pipeline_events(ts);"))
+        return false;
+    if (!exec_("CREATE INDEX IF NOT EXISTS idx_pipeline_events_event_ts "
+               "ON pipeline_events(event, ts);")) return false;
+
     if (has_vec0_) {
         std::ostringstream sql;
         sql << "CREATE VIRTUAL TABLE IF NOT EXISTS vec_documents USING vec0("

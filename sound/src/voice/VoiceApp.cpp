@@ -36,16 +36,24 @@ bool VoiceApp::init() {
     std::signal(SIGINT, &handle_sigint);
     g_app_running = true;
 
-    whisper_ = std::make_unique<WhisperEngine>(options_.model_path.c_str());
+    // Load AppConfig first so we can feed locale.whisper_language into
+    // WhisperConfig before constructing the engine.  Env overrides still
+    // win over the file-loaded defaults (via `apply_env_overrides`).
+    const char* prompts_dir =
+        options_.prompts_dir.empty() ? nullptr : options_.prompts_dir.c_str();
+    config_ = AppConfig::load(options_.config_path.c_str(), prompts_dir);
+
+    WhisperConfig wcfg;
+    if (!config_.locale.whisper_language.empty()) {
+        wcfg.language = config_.locale.whisper_language;
+    }
+    wcfg.apply_env_overrides();
+    whisper_ = std::make_unique<WhisperEngine>(options_.model_path.c_str(), wcfg);
     if (!whisper_->isLoaded()) {
         std::cerr << "[VoiceApp] Failed to load whisper model at "
                   << options_.model_path << std::endl;
         return false;
     }
-
-    const char* prompts_dir =
-        options_.prompts_dir.empty() ? nullptr : options_.prompts_dir.c_str();
-    config_ = AppConfig::load(options_.config_path.c_str(), prompts_dir);
 
     if (!capture_.open(g_app_running, config_.audio)) {
         std::cerr << "[VoiceApp] Failed to open audio capture device "

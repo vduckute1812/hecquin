@@ -40,6 +40,24 @@ hecquin_add_unit_test(hecquin_sound_test_local_intent
     ${HECQUIN_SOUND_TEST_SRC_ROOT}/test_local_intent_matcher.cpp)
 target_link_libraries(hecquin_sound_test_local_intent PRIVATE hecquin_ai)
 
+# RetryingHttpClient backoff + transient-classification behaviour.
+# Compiled standalone (no hecquin_ai link) so the binary pulls in neither
+# libcurl nor OpenSSL — that dodges macOS EDR agents which otherwise
+# quarantine the signed artefact before it can even run.
+hecquin_add_unit_test(hecquin_sound_test_net_retry
+    ${HECQUIN_SOUND_TEST_SRC_ROOT}/test_retrying_http.cpp
+    ${HECQUIN_SOUND_SRC_ROOT}/ai/RetryingHttpClient.cpp)
+
+# VoiceListener secondary VAD gate — reject whispers / sparse background
+# chatter before they reach Whisper.  Links the full pipeline library
+# (SDL, whisper.cpp, Piper) but never calls into those dependencies, so the
+# test stays deterministic and offline.
+hecquin_add_unit_test(hecquin_sound_test_voice_listener_vad
+    ${HECQUIN_SOUND_TEST_SRC_ROOT}/test_voice_listener_vad.cpp)
+target_link_libraries(hecquin_sound_test_voice_listener_vad PRIVATE
+    hecquin_voice_pipeline
+    hecquin_piper_speech)
+
 # EmbeddingClient JSON round-trip through a fake HTTP client.
 hecquin_add_unit_test(hecquin_sound_test_embedding_json
     ${HECQUIN_SOUND_TEST_SRC_ROOT}/test_embedding_client_json.cpp)
@@ -86,3 +104,54 @@ target_link_libraries(hecquin_sound_test_pitch_tracker PRIVATE hecquin_prosody)
 hecquin_add_unit_test(hecquin_sound_test_intonation_scorer
     ${HECQUIN_SOUND_TEST_SRC_ROOT}/test_intonation_scorer.cpp)
 target_link_libraries(hecquin_sound_test_intonation_scorer PRIVATE hecquin_prosody)
+
+# PronunciationDrillProcessor end-to-end — fake emissions + injected plan
+# drive the feedback pipeline without espeak-ng, onnxruntime, or Piper.
+if (HECQUIN_HAS_SQLITE)
+    hecquin_add_unit_test(hecquin_sound_test_pronunciation_drill
+        ${HECQUIN_SOUND_TEST_SRC_ROOT}/test_pronunciation_drill.cpp)
+    target_link_libraries(hecquin_sound_test_pronunciation_drill PRIVATE hecquin_drill)
+
+    # EnglishTutorProcessor RAG-context truncation + reply parsing.
+    hecquin_add_unit_test(hecquin_sound_test_english_tutor_processor
+        ${HECQUIN_SOUND_TEST_SRC_ROOT}/test_english_tutor_processor.cpp)
+    target_link_libraries(hecquin_sound_test_english_tutor_processor PRIVATE
+        hecquin_learning)
+
+    # DrillSentencePicker spaced-repetition round-robin (no Piper, no DB).
+    hecquin_add_unit_test(hecquin_sound_test_drill_sentence_picker
+        ${HECQUIN_SOUND_TEST_SRC_ROOT}/test_drill_sentence_picker.cpp)
+    target_link_libraries(hecquin_sound_test_drill_sentence_picker PRIVATE
+        hecquin_drill)
+
+    # DrillReferenceAudio LRU eviction + MRU bump.
+    hecquin_add_unit_test(hecquin_sound_test_drill_reference_audio_lru
+        ${HECQUIN_SOUND_TEST_SRC_ROOT}/test_drill_reference_audio_lru.cpp)
+    target_link_libraries(hecquin_sound_test_drill_reference_audio_lru PRIVATE
+        hecquin_drill)
+endif ()
+
+# PiperFallbackBackend strategy chain — stubbed backends, no real Piper.
+hecquin_add_unit_test(hecquin_sound_test_piper_backend_fallback
+    ${HECQUIN_SOUND_TEST_SRC_ROOT}/test_piper_backend_fallback.cpp)
+target_link_libraries(hecquin_sound_test_piper_backend_fallback PRIVATE
+    hecquin_piper_speech)
+
+# Ingestor chunking strategy dispatch (prose vs jsonl).
+hecquin_add_unit_test(hecquin_sound_test_ingest_chunking_strategy
+    ${HECQUIN_SOUND_TEST_SRC_ROOT}/test_ingest_chunking_strategy.cpp)
+target_link_libraries(hecquin_sound_test_ingest_chunking_strategy PRIVATE
+    hecquin_learning)
+
+# Ingest content fingerprint determinism.
+hecquin_add_unit_test(hecquin_sound_test_content_fingerprint
+    ${HECQUIN_SOUND_TEST_SRC_ROOT}/test_content_fingerprint.cpp)
+target_link_libraries(hecquin_sound_test_content_fingerprint PRIVATE
+    hecquin_learning)
+
+# UtteranceRouter chain-of-responsibility ordering.
+hecquin_add_unit_test(hecquin_sound_test_utterance_router
+    ${HECQUIN_SOUND_TEST_SRC_ROOT}/test_utterance_router.cpp)
+target_link_libraries(hecquin_sound_test_utterance_router PRIVATE
+    hecquin_voice_pipeline
+    hecquin_piper_speech)

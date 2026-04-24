@@ -94,6 +94,17 @@ AppConfig AppConfig::load(const char* env_file_path, const char* prompts_dir) {
     if (!drill_sentences.empty()) {
         cfg.pronunciation.drill_sentences_path = drill_sentences;
     }
+    const std::string calibration = store.resolve("HECQUIN_PRONUNCIATION_CALIBRATION");
+    if (!calibration.empty()) {
+        cfg.pronunciation.calibration_path = calibration;
+    }
+
+    const std::string ui_locale = store.resolve("HECQUIN_LOCALE");
+    if (!ui_locale.empty()) cfg.locale.ui = ui_locale;
+    const std::string whisper_lang = store.resolve("HECQUIN_WHISPER_LANGUAGE");
+    if (!whisper_lang.empty()) cfg.locale.whisper_language = whisper_lang;
+    const std::string espeak_voice = store.resolve("HECQUIN_ESPEAK_VOICE");
+    if (!espeak_voice.empty()) cfg.locale.espeak_voice = espeak_voice;
 
     return cfg;
 }

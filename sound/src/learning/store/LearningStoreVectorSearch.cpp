@@ -8,6 +8,7 @@
 #include "learning/store/LearningStore.hpp"
 
 #ifdef HECQUIN_WITH_SQLITE
+#include "learning/store/detail/VectorSearchOps.hpp"
 #include "learning/store/internal/SqliteHelpers.hpp"
 #include <sqlite3.h>
 
@@ -21,29 +22,29 @@
 namespace hecquin::learning {
 
 #ifdef HECQUIN_WITH_SQLITE
-using detail::prepare_or_log;
-#endif
+
+namespace store::detail {
 
 std::vector<RetrievedDocument>
-LearningStore::query_top_k(const std::vector<float>& embedding, int k) const {
+query_top_k(sqlite3* db,
+            learning::detail::StatementCache& cache,
+            bool has_vec0,
+            int embedding_dim,
+            const std::vector<float>& embedding,
+            int k) {
     std::vector<RetrievedDocument> out;
-#ifndef HECQUIN_WITH_SQLITE
-    (void)embedding; (void)k;
-    return out;
-#else
-    if (!db_ || k <= 0) return out;
-    if (static_cast<int>(embedding.size()) != embedding_dim_) {
+    if (!db || k <= 0) return out;
+    if (static_cast<int>(embedding.size()) != embedding_dim) {
         std::cerr << "[LearningStore] query dim mismatch: got " << embedding.size()
-                  << " expected " << embedding_dim_ << std::endl;
+                  << " expected " << embedding_dim << std::endl;
         return out;
     }
 
-    if (has_vec0_) {
-        auto q = prepare_or_log(db_,
+    if (has_vec0) {
+        auto q = cache.acquire("topk.vec",
             "SELECT d.id, d.source, d.kind, d.title, d.body, d.metadata_json, v.distance "
             "FROM vec_documents v JOIN documents d ON d.id = v.rowid "
-            "WHERE v.embedding MATCH ? AND k = ? ORDER BY v.distance;",
-            "topk.vec");
+            "WHERE v.embedding MATCH ? AND k = ? ORDER BY v.distance;");
         if (!q) return out;
         sqlite3_bind_blob(q.get(), 1, embedding.data(),
                           static_cast<int>(embedding.size() * sizeof(float)),
@@ -67,10 +68,9 @@ LearningStore::query_top_k(const std::vector<float>& embedding, int k) const {
         return out;
     }
 
-    auto scan = prepare_or_log(db_,
+    auto scan = cache.acquire("topk.scan",
         "SELECT d.id, d.source, d.kind, d.title, d.body, d.metadata_json, v.embedding "
-        "FROM vec_documents v JOIN documents d ON d.id = v.rowid;",
-        "topk.scan");
+        "FROM vec_documents v JOIN documents d ON d.id = v.rowid;");
     if (!scan) return out;
 
     auto norm = [](const float* v, int n) {
@@ -124,6 +124,20 @@ LearningStore::query_top_k(const std::vector<float>& embedding, int k) const {
     }
     std::reverse(out.begin(), out.end());
     return out;
+}
+
+} // namespace store::detail
+
+#endif // HECQUIN_WITH_SQLITE
+
+std::vector<RetrievedDocument>
+LearningStore::query_top_k(const std::vector<float>& embedding, int k) const {
+#ifndef HECQUIN_WITH_SQLITE
+    (void)embedding; (void)k;
+    return {};
+#else
+    return store::detail::query_top_k(db_, *stmt_cache_, has_vec0_,
+                                      embedding_dim_, embedding, k);
 #endif
 }
 

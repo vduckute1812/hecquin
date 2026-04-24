@@ -6,6 +6,10 @@
 #include <future>
 #include <string>
 
+namespace hecquin::ai {
+class IHttpClient;
+}
+
 namespace hecquin::learning {
 
 class LearningStore;
@@ -32,6 +36,15 @@ public:
                           ProgressTracker& progress,
                           EnglishTutorConfig cfg = {});
 
+    /**
+     * Inject a custom HTTP client — used by tests to return canned
+     * responses without touching the network.  Nullptr (the default) falls
+     * back to the libcurl-backed `http_post_json` free function.
+     */
+    void set_http_client_for_test(hecquin::ai::IHttpClient* client) {
+        http_client_ = client;
+    }
+
     Action process(const std::string& transcript);
     std::future<Action> process_async(const std::string& transcript);
 
@@ -46,6 +59,7 @@ private:
     RetrievalService& retrieval_;
     ProgressTracker& progress_;
     EnglishTutorConfig cfg_;
+    hecquin::ai::IHttpClient* http_client_ = nullptr;
 };
 
 } // namespace hecquin::learning

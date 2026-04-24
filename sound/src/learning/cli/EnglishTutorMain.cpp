@@ -1,12 +1,14 @@
 #include "ai/CommandProcessor.hpp"
 #include "ai/IHttpClient.hpp"
 #include "ai/LoggingHttpClient.hpp"
+#include "ai/RetryingHttpClient.hpp"
 #include "learning/EmbeddingClient.hpp"
 #include "learning/EnglishTutorProcessor.hpp"
-#include "learning/store/LearningStore.hpp"
 #include "learning/ProgressTracker.hpp"
+#include "learning/PronunciationDrillProcessor.hpp"
 #include "learning/RetrievalService.hpp"
-#include "voice/VoiceApp.hpp"
+#include "learning/cli/LearningApp.hpp"
+#include "learning/store/LearningStore.hpp"
 #include "voice/VoiceListener.hpp"
 
 #include <iostream>
@@ -23,31 +25,36 @@
 #ifndef DEFAULT_PROMPTS_DIR
 #define DEFAULT_PROMPTS_DIR ""
 #endif
+#ifndef DEFAULT_PRONUNCIATION_MODEL_PATH
+#define DEFAULT_PRONUNCIATION_MODEL_PATH ""
+#endif
+#ifndef DEFAULT_PRONUNCIATION_VOCAB_PATH
+#define DEFAULT_PRONUNCIATION_VOCAB_PATH ""
+#endif
 
 int main() {
-    hecquin::voice::VoiceApp app({
-        DEFAULT_MODEL_PATH,
-        DEFAULT_PIPER_MODEL_PATH,
-        DEFAULT_CONFIG_PATH,
-        DEFAULT_PROMPTS_DIR,
+    hecquin::learning::cli::LearningApp app({
+        /*whisper_model_path=*/DEFAULT_MODEL_PATH,
+        /*piper_model_path=*/DEFAULT_PIPER_MODEL_PATH,
+        /*config_path=*/DEFAULT_CONFIG_PATH,
+        /*prompts_dir=*/DEFAULT_PROMPTS_DIR,
+        /*baked_pron_model=*/DEFAULT_PRONUNCIATION_MODEL_PATH,
+        /*baked_pron_vocab=*/DEFAULT_PRONUNCIATION_VOCAB_PATH,
+        /*progress_mode=*/"lesson",
+        /*open_secondary_drill_progress=*/true,
     });
     if (!app.init()) return 1;
 
     AppConfig& cfg = app.config();
+    auto& store = app.store();
 
-    hecquin::learning::LearningStore store(cfg.learning.db_path, cfg.ai.embedding_dim);
-    const bool store_open = store.open();
-    if (!store_open) {
-        std::cerr << "[english_tutor] Learning DB unavailable; continuing without RAG / progress."
-                  << std::endl;
-    }
-
-    // Decorator chain: CurlHttpClient  →  LoggingHttpClient  →  {ChatClient, EmbeddingClient}
-    // When the DB opened we bind the sink to `record_api_call`; otherwise the
-    // decorator becomes a transparent passthrough.
+    // Decorator chain: CurlHttpClient → LoggingHttpClient → RetryingHttpClient.
+    // The retrier sits *outside* the logger so every HTTP attempt — including
+    // the failed ones the retrier re-issues — shows up as its own `api_calls`
+    // row.  That makes rate-limit churn visible on the dashboard.
     hecquin::ai::CurlHttpClient      raw_http;
     hecquin::ai::ApiCallSink         sink;
-    if (store_open) {
+    if (app.store_open()) {
         sink = [&store](const hecquin::ai::ApiCallRecord& r) {
             store.record_api_call(r.provider, r.endpoint, r.method,
                                   r.status, r.latency_ms,
@@ -55,30 +62,41 @@ int main() {
                                   r.ok, r.error);
         };
     }
-    hecquin::ai::LoggingHttpClient   http(raw_http, "chat", sink);
-    hecquin::ai::LoggingHttpClient   embed_http(raw_http, "embedding", sink);
+    hecquin::ai::LoggingHttpClient   logged_chat_http(raw_http, "chat", sink);
+    hecquin::ai::LoggingHttpClient   logged_embed_http(raw_http, "embedding", sink);
+    hecquin::ai::RetryPolicy         retry_policy;
+    retry_policy.apply_env_overrides();
+    hecquin::ai::RetryingHttpClient  http(logged_chat_http, retry_policy);
+    hecquin::ai::RetryingHttpClient  embed_http(logged_embed_http, retry_policy);
 
     hecquin::learning::EmbeddingClient   embedder(cfg.ai, embed_http);
     hecquin::learning::RetrievalService  retrieval(store, embedder);
-    hecquin::learning::ProgressTracker   progress(store, "lesson");
 
     hecquin::learning::EnglishTutorConfig tcfg;
     tcfg.rag_top_k = cfg.learning.rag_top_k;
-    hecquin::learning::EnglishTutorProcessor tutor(cfg.ai, retrieval, progress, tcfg);
+    hecquin::learning::EnglishTutorProcessor tutor(cfg.ai, retrieval, app.progress(), tcfg);
 
-    CommandProcessor commands(cfg.ai, http);
-    VoiceListener listener(app.whisper(), app.capture(), commands,
-                           app.running(), app.piper_model_path());
+    auto matcher_cfg = app.matcher_config();
+    CommandProcessor commands(cfg.ai, http, std::move(matcher_cfg));
+    VoiceListenerConfig vcfg;
+    vcfg.apply_env_overrides();
+    VoiceListener listener(app.voice().whisper(), app.voice().capture(), commands,
+                           app.voice().running(), app.piper_model_path(), vcfg);
+    app.wire_pipeline_sink(listener);
+    app.wire_drill_callbacks(listener);
     listener.setTutorCallback([&tutor](const Utterance& u) {
         return tutor.process(u.transcript);
     });
     listener.setInitialMode(ListenerMode::Lesson);
+    // "exit drill" returns to Lesson (the binary's home) instead of falling
+    // through to the generic Assistant / chat-completions fallback.
+    listener.setHomeMode(ListenerMode::Lesson);
 
-    std::cout << "[english_tutor] Lesson mode enabled — say 'exit lesson' to stop learning."
+    std::cout << "[english_tutor] Lesson mode enabled — say 'exit lesson' to stop learning,\n"
+              << "                or 'begin pronunciation' to enter the drill."
               << std::endl;
     listener.run();
 
-    progress.close();
     app.shutdown();
     std::cout << "\n[english_tutor] exited cleanly." << std::endl;
     return 0;

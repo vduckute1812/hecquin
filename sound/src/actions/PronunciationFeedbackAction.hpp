@@ -82,6 +82,7 @@ struct DrillModeToggleAction {
                                  : "Drill mode off.")
             : reply;
         a.transcript = std::move(tr);
+        a.enable = enable;
         return a;
     }
 };

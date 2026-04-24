@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <limits>
+#include <vector>
 
 namespace hecquin::learning::pronunciation {
 
@@ -34,68 +35,85 @@ AlignResult CtcAligner::align(const Emissions& emissions,
     const std::size_t S = ext.size();
     if (S > T) return result;   // cannot align — not enough frames
 
-    // Viterbi trellis: score[t][s] = best path log-prob ending at (t, s).
-    std::vector<std::vector<float>> score(T, std::vector<float>(S, kNegInf));
-    std::vector<std::vector<int>> back(T, std::vector<int>(S, -1));
+    // Flat, cache-friendly storage.
+    //
+    //   score holds the best path log-prob for the current + previous frames
+    //   (Viterbi only looks back one step, so two rows is enough).
+    //   back is T*S and records, for each (t, s), which `s` in the previous
+    //   frame the best path came from; we need it all to backtrack.
+    //
+    // Combining these cuts the alignment memory from ~T*S*8 bytes (score +
+    // back as vector<vector<>>) to ~T*S*4 bytes plus a 2*S scratch for score,
+    // and removes the per-row allocation overhead of the nested vector.
+    std::vector<float> score_buf(2 * S, kNegInf);
+    std::vector<int>   back(T * S, -1);
+    auto prev_row = [&](std::size_t s) -> float& { return score_buf[s]; };
+    auto cur_row  = [&](std::size_t s) -> float& { return score_buf[S + s]; };
 
     // Initialisation — at frame 0 we may emit either the leading blank (s=0)
     // or the first real phoneme (s=1).
     const auto& e0 = emissions.logits[0];
-    score[0][0] = e0[static_cast<std::size_t>(ext[0])];
+    prev_row(0) = e0[static_cast<std::size_t>(ext[0])];
     if (S > 1) {
-        score[0][1] = e0[static_cast<std::size_t>(ext[1])];
+        prev_row(1) = e0[static_cast<std::size_t>(ext[1])];
     }
 
     for (std::size_t t = 1; t < T; ++t) {
         const auto& row = emissions.logits[t];
+        const std::size_t back_base = t * S;
         for (std::size_t s = 0; s < S; ++s) {
             const int sym = ext[s];
             float best = kNegInf;
             int best_prev = -1;
 
             // Stay: (t-1, s) -> (t, s).
-            if (score[t - 1][s] > best) {
-                best = score[t - 1][s];
-                best_prev = static_cast<int>(s);
-            }
+            const float v_stay = prev_row(s);
+            if (v_stay > best) { best = v_stay; best_prev = static_cast<int>(s); }
             // Step: (t-1, s-1) -> (t, s).
-            if (s >= 1 && score[t - 1][s - 1] > best) {
-                best = score[t - 1][s - 1];
-                best_prev = static_cast<int>(s - 1);
+            if (s >= 1) {
+                const float v_step = prev_row(s - 1);
+                if (v_step > best) { best = v_step; best_prev = static_cast<int>(s - 1); }
             }
             // Skip one blank: (t-1, s-2) -> (t, s) only if current is a real
             // phoneme and the two neighbours are different (CTC collapse rule).
             if (s >= 2 && sym != blank && ext[s - 2] != sym) {
-                if (score[t - 1][s - 2] > best) {
-                    best = score[t - 1][s - 2];
-                    best_prev = static_cast<int>(s - 2);
-                }
+                const float v_skip = prev_row(s - 2);
+                if (v_skip > best) { best = v_skip; best_prev = static_cast<int>(s - 2); }
             }
 
-            if (best == kNegInf) continue;
-            score[t][s] = best + row[static_cast<std::size_t>(sym)];
-            back[t][s] = best_prev;
+            if (best == kNegInf) {
+                cur_row(s) = kNegInf;
+                back[back_base + s] = -1;
+                continue;
+            }
+            cur_row(s) = best + row[static_cast<std::size_t>(sym)];
+            back[back_base + s] = best_prev;
         }
+        // Rotate rows without reallocating.
+        std::copy_n(score_buf.begin() + S, S, score_buf.begin());
+        std::fill_n(score_buf.begin() + S, S, kNegInf);
     }
+
+    // After the loop `prev_row` (first S cells) holds frame T-1.
+    auto last = [&](std::size_t s) { return score_buf[s]; };
 
     // Termination: the path must end at the trailing blank (S-1) or the last
     // real phoneme (S-2).
     int end_s = static_cast<int>(S - 1);
-    if (S >= 2 && score[T - 1][S - 2] > score[T - 1][S - 1]) {
+    if (S >= 2 && last(S - 2) > last(S - 1)) {
         end_s = static_cast<int>(S - 2);
     }
-    if (score[T - 1][end_s] == kNegInf) return result;
+    if (last(static_cast<std::size_t>(end_s)) == kNegInf) return result;
 
     // Backtrack to recover per-frame state sequence.
     std::vector<int> path(T, 0);
     path[T - 1] = end_s;
     for (std::size_t t = T - 1; t > 0; --t) {
-        path[t - 1] = back[t][path[t]];
+        path[t - 1] = back[t * S + static_cast<std::size_t>(path[t])];
         if (path[t - 1] < 0) return result;
     }
 
     // Collapse state path → per-target phoneme frame spans.
-    // We walk forward, noting when `ext[s]` changes to the next real phoneme.
     result.segments.reserve(targets.size());
     std::size_t target_idx = 0;
     std::size_t span_start = 0;
@@ -105,7 +123,6 @@ AlignResult CtcAligner::align(const Emissions& emissions,
         if (ext_idx < 0) return;
         const int sym = ext[static_cast<std::size_t>(ext_idx)];
         if (sym == blank) return;
-        // This span corresponds to `targets[target_idx]`; sanity check.
         if (target_idx >= targets.size() || sym != targets[target_idx]) return;
         double sum = 0.0;
         for (std::size_t t = span_start; t < end_frame; ++t) {
@@ -131,8 +148,6 @@ AlignResult CtcAligner::align(const Emissions& emissions,
     flush_span(T, current_ext_idx);
 
     if (target_idx != targets.size()) {
-        // Some targets did not get a span (should not happen when termination
-        // ends on S-1 or S-2 with finite score, but guard anyway).
         result.segments.clear();
         return result;
     }

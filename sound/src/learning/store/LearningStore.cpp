@@ -41,6 +41,9 @@ LearningStore::LearningStore(std::string db_path, int embedding_dim)
 
 LearningStore::~LearningStore() {
 #ifdef HECQUIN_WITH_SQLITE
+    // Finalise any cached prepared statements before closing the connection
+    // — SQLite refuses to close a db that still has live statements.
+    stmt_cache_.reset();
     if (db_) {
         sqlite3_close(db_);
         db_ = nullptr;
@@ -97,6 +100,9 @@ bool LearningStore::open() {
 
     if (!run_migrations_()) return false;
     if (!check_embedding_dim_()) return false;
+    // Statement cache is created *after* migrations so the first hot-path
+    // caller doesn't race with DDL.  Lives until `~LearningStore`.
+    stmt_cache_ = std::make_unique<detail::StatementCache>(db_);
     return true;
 #endif
 }

@@ -50,7 +50,10 @@ sound/
 ```
 
 For the full directory tree, component breakdown, and build-system internals see
-[`ARCHITECTURE.md`](./ARCHITECTURE.md).
+[`ARCHITECTURE.md`](./ARCHITECTURE.md). For **per-folder** documentation — one
+short README inside every sub-package under `src/` listing its files,
+responsibilities, and the design patterns it uses — start at
+[`src/README.md`](./src/README.md).
 
 ## Quick Start
 
@@ -74,7 +77,7 @@ Optional environment variables (see `scripts/install_build_all.sh` for comments)
 | `WHISPER_MODEL`      | Whisper GGML model name (default: `base`)                              |
 | `PIPER_VOICE`        | Piper voice id (default: `en_US-lessac-medium`)                        |
 | `HECQUIN_ENV`        | Same as for `./dev.sh`: `dev` or `prod` to override platform detection |
-| `HECQUIN_SOUND_BUILD_TESTS` | CMake: set `OFF` to skip the small `hecquin_sound_test_openai_chat` binary |
+| `HECQUIN_SOUND_BUILD_TESTS` | CMake: set `OFF` to skip the `hecquin_sound_test_*` unit-test suite (defaults to `ON`). |
 
 
 After this, continue with **Run** below.
@@ -88,7 +91,10 @@ cd sound/build
 ctest --output-on-failure
 ```
 
-Or run the binary directly: `./hecquin_sound_test_openai_chat` (build tree location depends on your generator). For manual, step-by-step setup, use the following sections instead.
+For what each test covers and how the suite is organised, see
+[`ARCHITECTURE.md → Testing`](./ARCHITECTURE.md#testing).
+
+For manual, step-by-step setup, use the following sections instead.
 
 ### 1. Install System Dependencies
 
@@ -182,14 +188,12 @@ The voice detector listens on the default microphone, detects speech activity, t
 | *(no match)*                               | `ExternalApi`            | Assistant text from the HTTP API (or an error / disabled message) |
 
 
-`ActionKind::AssistantSdk` is reserved for a future subprocess (e.g. Python Google Assistant SDK); it is not wired yet.
-
 **Audio configuration:**
 
 - Sample rate: 16 kHz (required by Whisper)
 - Channels: Mono
-- Voice activity detection for automatic capture
-- Language: English (configurable in code)
+- Voice activity detection for automatic capture (secondary gate logs an explicit `too_quiet` / `too_sparse` reason per rejection)
+- Language: `HECQUIN_WHISPER_LANGUAGE` (default `en`, `""` = auto-detect)
 - Device selection via `AUDIO_DEVICE_INDEX` in `.env/config.env` (`-1` = system default; run once to see the numbered device list)
 
 **External AI environment variables:**
@@ -201,6 +205,14 @@ The voice detector listens on the default microphone, detects speech activity, t
 | `OPENAI_BASE_URL` or `HECQUIN_AI_BASE_URL` | API root (default: `https://api.openai.com/v1`) |
 | `OPENAI_MODEL` or `HECQUIN_AI_MODEL`       | Model name (default: `gpt-4o-mini`)             |
 | `AUDIO_DEVICE_INDEX`                       | Capture device index (`-1` = system default)    |
+| `HECQUIN_WHISPER_LANGUAGE`                 | Whisper decode language (ISO-639-1, default `en`; `""` = auto-detect) |
+| `HECQUIN_WHISPER_THREADS`                  | Whisper CPU threads (default: `max(2, hardware_concurrency()/2)`) |
+| `HECQUIN_WHISPER_BEAM_SIZE`                | `0` = greedy (default), `>0` enables beam search |
+| `HECQUIN_WHISPER_NO_SPEECH`                | Per-segment no-speech probability cutoff (default `0.6`) |
+| `HECQUIN_WHISPER_MIN_ALNUM`                | Minimum alphanumeric chars to keep a decoded utterance (default `2`) |
+| `HECQUIN_WHISPER_SUPPRESS_SEGS`            | `1` to silence per-segment `> …` stdout dumps |
+| `HECQUIN_LOG_LEVEL`                        | `debug` / `info` / `warn` / `error` (default `info`) |
+| `HECQUIN_LOG_FORMAT`                       | `pretty` (default) or `json` (one JSON object per log line) |
 
 **System prompt:** The AI system prompt is loaded from `.env/prompts/system_prompt.txt` at startup. Edit this file to change the assistant's personality or response style without recompiling. If the file is missing, a built-in default is used.
 
@@ -352,7 +364,18 @@ Download with: `./dev.sh piper:download-model <voice>`
 ./dev.sh env:clean          # Clean current platform
 ./dev.sh env:clean mac      # Clean macOS build
 ./dev.sh env:clean rpi      # Clean Raspberry Pi build
+
+# Code quality (see sound/.clang-format and sound/.clang-tidy)
+./dev.sh fmt                # Run clang-format on staged C/C++ files under sound/ (or: ./dev.sh fmt path/…)
+./dev.sh hooks:install      # Symlink scripts/pre-commit.sh into .git/hooks/pre-commit
 ```
+
+The pre-commit hook runs `clang-format -i` on staged `*.{c,cc,cpp,h,hpp}`
+paths under `sound/` and re-stages them. A `.github/workflows/sound.yml`
+workflow runs build + `ctest --output-on-failure` on `ubuntu-latest` and
+`macos-latest`, plus a `clang-format --dry-run` check on changed files (a
+companion `clang-tidy` job reports findings without failing the build for
+now).
 
 ## English Tutor Mode
 
@@ -413,8 +436,11 @@ Reason: The past tense of "go" is the irregular form "went".
 | `HECQUIN_DRILL_PASS_THRESHOLD`   | `75`                                                 | Overall score (0..100) that counts as a pass for the drill |
 | `HECQUIN_PRONUNCIATION_MODEL`    | `.env/shared/models/pronunciation/wav2vec2_phoneme.onnx` | wav2vec2 phoneme-CTC ONNX model          |
 | `HECQUIN_PRONUNCIATION_VOCAB`    | `.env/shared/models/pronunciation/vocab.json`        | HuggingFace-style token→id vocab for the above |
+| `HECQUIN_PRONUNCIATION_CALIBRATION` | `.env/shared/models/pronunciation/calibration.json` | Optional per-IPA `{min_logp,max_logp}` overrides; missing → global anchors |
 | `HECQUIN_ONNX_PROVIDER`          | `cpu`                                                | onnxruntime execution provider (`cpu` / `coreml` / `cuda`) |
 | `HECQUIN_DRILL_SENTENCES`        | `.env/shared/learning/drill/sentences.txt`           | Optional newline-delimited pool of sentences the drill picks from |
+| `HECQUIN_LOCALE`                 | `en-US`                                              | UI / prompt-lookup locale (currently English-only, plumbing only) |
+| `HECQUIN_ESPEAK_VOICE`           | `en-us`                                              | espeak-ng voice used by G2P (`""` = library default) |
 
 ### Dependencies (extra for the tutor)
 
@@ -423,17 +449,38 @@ Reason: The past tense of "go" is the irregular form "went".
 - **libcurl** (same as the base bot) — required for the embeddings HTTP call.
 
 
-## API Call Telemetry
+## Logging & telemetry
+
+### Structured logs
+
+The module logs through a small in-process logger at
+`src/observability/Log.hpp`:
+
+- `HECQUIN_LOG_LEVEL=debug|info|warn|error` (default `info`) controls verbosity.
+- `HECQUIN_LOG_FORMAT=json` switches from the default pretty one-liner to
+  JSON Lines (`{"ts":…, "level":…, "tag":…, "msg":…}`), convenient for log
+  scrapers and the dashboard ingest pipeline. Any other value (or unset)
+  keeps the pretty format.
+
+### API call telemetry
 
 Every outbound chat/embedding call is logged automatically: the
-`LoggingHttpClient` decorator wraps `CurlHttpClient` and writes one row per
-request into the `api_calls` SQLite table (latency, status, request/response
-bytes, error). No extra flag is required — when libcurl is available, telemetry
-is on. The sibling **`dashboard/`** module consumes this table (plus its own
-`request_logs`) to render daily traffic, latency, and error-rate charts over
-HTTPS; see [`../dashboard/README.md`](../dashboard/README.md) for setup, and
-[`ARCHITECTURE.md → API-call telemetry pipeline`](./ARCHITECTURE.md#api-call-telemetry-pipeline-v2)
-for the internal flow.
+`RetryingHttpClient` → `LoggingHttpClient` → `CurlHttpClient` decorator chain
+wraps every HTTP call and writes one row per request into the `api_calls`
+SQLite table (latency, status, request/response bytes, error — with retries
+collapsed to the terminal outcome). No extra flag is required — when libcurl
+is available, telemetry is on.
+
+### Pipeline events (v3 schema)
+
+Stage-level latencies and outcomes (`vad_gate`, `whisper`, `piper_synth`,
+`drill_align`, `drill_pick`, …) are written to the `pipeline_events` table
+via the same sink mechanism. The sibling **`dashboard/`** module consumes
+both tables (plus its own `request_logs`) to render daily traffic, latency,
+gate-failure, and error-rate charts over HTTPS; see
+[`../dashboard/README.md`](../dashboard/README.md) for setup, and
+[`ARCHITECTURE.md → Observability`](./ARCHITECTURE.md#observability) for the
+internal flow.
 
 ## Pronunciation & Intonation Drill
 
@@ -474,12 +521,16 @@ compiles, but `PhonemeModel::load()` returns false and the drill reports
 #   "exit drill"                  → return to assistant mode
 ```
 
-The robot picks a random sentence from `HECQUIN_DRILL_SENTENCES` (falling back
-to a built-in English pool), speaks it via Piper, and waits for the learner to
-repeat it. Every attempt is stored in `pronunciation_attempts` and aggregated
-per-IPA in `phoneme_mastery` so future drills can target weak phonemes — see
-the v2 schema table in
-[`ARCHITECTURE.md`](./ARCHITECTURE.md#sqlite-schema-learning-db-v2).
+The robot picks sentences from `HECQUIN_DRILL_SENTENCES` (falling back to a
+built-in English pool) using a **spaced-repetition picker**: each draw is
+biased toward sentences whose IPA plan covers the learner's current weakest
+phonemes (from `phoneme_mastery`), with a small epsilon chance of a plain
+rotation so the learner still sees variety. The reference PCM + pitch contour
+for each sentence is memoised in a small LRU (keyed by sentence hash) so
+repeats and rotate-backs replay cached audio without re-invoking Piper. Every
+attempt is stored in `pronunciation_attempts` and aggregated per-IPA in
+`phoneme_mastery` — see the v3 schema table in
+[`ARCHITECTURE.md`](./ARCHITECTURE.md#sqlite-schema-learning-db-v3).
 
 ## CMake Configuration
 

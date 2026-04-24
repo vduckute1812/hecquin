@@ -36,6 +36,16 @@ struct IngestorConfig {
 /**
  * Scans curriculum / custom directories, skips unchanged files (by content hash),
  * chunks text, embeds each chunk through `EmbeddingClient`, and upserts into `LearningStore`.
+ *
+ * Internally this is a thin coordinator over the collaborators under
+ * `src/learning/ingest/`:
+ *
+ *   - `FileDiscovery`        — directory walk + kind assignment
+ *   - `ContentFingerprint`   — FNV-1a change detection
+ *   - `ChunkingStrategy`     — prose vs JSONL splitter (Strategy)
+ *   - `EmbeddingBatcher`     — batched embed + per-chunk fallback
+ *   - `DocumentPersister`    — per-chunk `DocumentRecord` assembly
+ *   - `ProgressReporter`     — CLI output / ETA
  */
 class Ingestor {
 public:
@@ -45,8 +55,6 @@ public:
     IngestReport run();
 
 private:
-    void ingest_dir_(const std::string& dir, const std::string& default_kind,
-                     IngestReport& report);
     void ingest_file_(const std::string& path, const std::string& kind,
                       IngestReport& report);
 
@@ -55,8 +63,8 @@ private:
     IngestorConfig cfg_;
 
     // Progress counters (updated by run()).
-    size_t total_files_ = 0;
-    size_t file_index_ = 0;
+    std::size_t total_files_ = 0;
+    std::size_t file_index_ = 0;
 };
 
 } // namespace hecquin::learning

@@ -14,8 +14,10 @@
 #include <cstdint>
 #include <filesystem>
 #include <iostream>
+#include <mutex>
 #include <string>
 #include <system_error>
+#include <unordered_map>
 
 namespace hecquin::learning::detail {
 
@@ -119,6 +121,100 @@ inline bool step_done(sqlite3* db, sqlite3_stmt* s, const char* tag) {
     }
     return true;
 }
+
+/**
+ * Prepared-statement cache.
+ *
+ * Amortises `sqlite3_prepare_v2` (which is ~10× more expensive than a step
+ * for the short queries we run) across repeated calls.  The first call for
+ * a given `tag` compiles + stores the statement; subsequent calls reset +
+ * rebind and reuse it.  `tag` is the cache key, not `sql` itself, so callers
+ * can keep human-readable tags like "topk.vec" or "api_calls.insert".
+ *
+ * Threading: the cache owns a mutex and hands out a `CachedStmt` RAII handle
+ * that holds the mutex for its lifetime — matching the serialisation
+ * guarantee SQLite's default threading mode gives on a single connection.
+ * The cache must be cleared before `sqlite3_close` (statements hold refs on
+ * the connection); `LearningStore::~LearningStore` does this via destruction
+ * of the owning `unique_ptr`.
+ */
+class StatementCache;
+
+class CachedStmt {
+public:
+    CachedStmt() = default;
+    CachedStmt(sqlite3_stmt* s, std::unique_lock<std::mutex>&& lock)
+        : stmt_(s), lock_(std::move(lock)) {}
+    CachedStmt(const CachedStmt&) = delete;
+    CachedStmt& operator=(const CachedStmt&) = delete;
+    CachedStmt(CachedStmt&& o) noexcept : stmt_(o.stmt_), lock_(std::move(o.lock_)) {
+        o.stmt_ = nullptr;
+    }
+    CachedStmt& operator=(CachedStmt&& o) noexcept {
+        if (this != &o) {
+            release_();
+            stmt_ = o.stmt_;
+            lock_ = std::move(o.lock_);
+            o.stmt_ = nullptr;
+        }
+        return *this;
+    }
+    ~CachedStmt() { release_(); }
+
+    explicit operator bool() const { return stmt_ != nullptr; }
+    sqlite3_stmt* get() const { return stmt_; }
+
+private:
+    void release_() {
+        if (stmt_) {
+            // Leave the compiled statement in the cache, but drop any
+            // bindings + result cursor so the next caller starts clean.
+            sqlite3_reset(stmt_);
+            sqlite3_clear_bindings(stmt_);
+            stmt_ = nullptr;
+        }
+        if (lock_.owns_lock()) lock_.unlock();
+    }
+
+    sqlite3_stmt* stmt_ = nullptr;
+    std::unique_lock<std::mutex> lock_;
+};
+
+class StatementCache {
+public:
+    explicit StatementCache(sqlite3* db) : db_(db) {}
+    ~StatementCache() = default;
+    StatementCache(const StatementCache&) = delete;
+    StatementCache& operator=(const StatementCache&) = delete;
+
+    /**
+     * Return a ready-to-bind cached statement for `tag`.  Falls back to
+     * compile-then-store on first use.  Returns an empty handle (`bool false`)
+     * and logs on compile failure.
+     */
+    CachedStmt acquire(const char* tag, const char* sql) {
+        std::unique_lock<std::mutex> lock(mu_);
+        auto it = cache_.find(tag);
+        if (it == cache_.end()) {
+            sqlite3_stmt* raw = nullptr;
+            const int rc = sqlite3_prepare_v2(db_, sql, -1, &raw, nullptr);
+            if (rc != SQLITE_OK) {
+                std::cerr << "[LearningStore] prepare_cached failed (" << tag
+                          << "): " << sqlite3_errmsg(db_) << std::endl;
+                if (raw) sqlite3_finalize(raw);
+                return CachedStmt{};
+            }
+            it = cache_.emplace(tag, StmtGuard{raw}).first;
+        }
+        sqlite3_stmt* stmt = it->second.get();
+        return CachedStmt{stmt, std::move(lock)};
+    }
+
+private:
+    sqlite3* db_;
+    std::mutex mu_;
+    std::unordered_map<std::string, StmtGuard> cache_;
+};
 
 } // namespace hecquin::learning::detail
 

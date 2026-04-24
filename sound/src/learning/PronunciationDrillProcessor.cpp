@@ -1,17 +1,14 @@
 #include "learning/PronunciationDrillProcessor.hpp"
 
 #include "actions/PronunciationFeedbackAction.hpp"
-#include "learning/store/LearningStore.hpp"
 #include "learning/ProgressTracker.hpp"
-#include "tts/PiperSpeech.hpp"
-
-#include <nlohmann/json.hpp>
+#include "learning/store/LearningStore.hpp"
 
 #include <algorithm>
 #include <fstream>
 #include <iostream>
 #include <random>
-#include <sstream>
+#include <utility>
 
 namespace hecquin::learning {
 
@@ -25,7 +22,7 @@ std::vector<std::string> load_sentences_from_file(const std::string& path) {
     while (std::getline(in, line)) {
         // Strip BOM + trailing CR / whitespace.
         while (!line.empty() && (line.back() == '\r' || line.back() == ' ' ||
-                                  line.back() == '\t' || line.back() == '\n')) {
+                                 line.back() == '\t' || line.back() == '\n')) {
             line.pop_back();
         }
         if (line.empty() || line[0] == '#') continue;
@@ -35,33 +32,37 @@ std::vector<std::string> load_sentences_from_file(const std::string& path) {
     return out;
 }
 
-std::string build_phoneme_json(const pronunciation::PronunciationScore& pron,
-                               const prosody::IntonationScore& into) {
-    nlohmann::json j;
-    j["pron_overall"] = pron.overall_0_100;
-    j["intonation_overall"] = into.overall_0_100;
-    j["final_direction_match"] = into.final_direction_match;
-    j["reference_direction"] = prosody::to_string(into.reference_direction);
-    j["learner_direction"] = prosody::to_string(into.learner_direction);
-    auto& words = j["words"] = nlohmann::json::array();
-    for (const auto& w : pron.words) {
-        nlohmann::json wj;
-        wj["word"] = w.word;
-        wj["score"] = w.score_0_100;
-        auto& phonemes = wj["phonemes"] = nlohmann::json::array();
-        for (const auto& p : w.phonemes) {
-            phonemes.push_back({{"ipa", p.ipa}, {"score", p.score_0_100}});
-        }
-        words.push_back(std::move(wj));
+pronunciation::drill::DrillScoringPipeline::Config
+make_scoring_cfg(const AppConfig& app_cfg, const PronunciationDrillConfig& cfg) {
+    pronunciation::drill::DrillScoringPipeline::Config scfg;
+    scfg.model_cfg.model_path = app_cfg.pronunciation.model_path;
+    scfg.model_cfg.vocab_path = app_cfg.pronunciation.vocab_path;
+    scfg.model_cfg.provider = app_cfg.pronunciation.onnx_provider;
+    if (!app_cfg.locale.espeak_voice.empty()) {
+        scfg.g2p_opts.voice = app_cfg.locale.espeak_voice;
     }
-    auto& issues = j["issues"] = nlohmann::json::array();
-    for (const auto& s : into.issues) issues.push_back(s);
-    // `replace` guards against the IPA / word text containing stray non-UTF-8
-    // bytes (e.g. if a future vocab source feeds bad input through G2P).
-    return j.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace);
+    scfg.calibration_path = app_cfg.pronunciation.calibration_path;
+    scfg.max_feedback_words = cfg.max_feedback_words;
+    return scfg;
 }
 
-}  // namespace
+pronunciation::drill::DrillReferenceAudio::Config
+make_reference_cfg(const std::string& piper_model_path, const PronunciationDrillConfig& cfg) {
+    pronunciation::drill::DrillReferenceAudio::Config rcfg;
+    rcfg.piper_model_path = piper_model_path;
+    rcfg.cache_size = cfg.reference_contour_cache_size;
+    return rcfg;
+}
+
+pronunciation::drill::DrillSentencePicker::Config
+make_picker_cfg(const PronunciationDrillConfig& cfg) {
+    pronunciation::drill::DrillSentencePicker::Config pcfg;
+    pcfg.weakest_phonemes_n = cfg.weakest_phonemes_n;
+    pcfg.weakness_bias = cfg.weakness_bias;
+    return pcfg;
+}
+
+} // namespace
 
 PronunciationDrillProcessor::PronunciationDrillProcessor(
     const AppConfig& app_cfg,
@@ -71,124 +72,89 @@ PronunciationDrillProcessor::PronunciationDrillProcessor(
     PronunciationDrillConfig cfg)
     : app_cfg_(app_cfg),
       store_(store),
-      progress_(progress),
-      piper_model_path_(piper_model_path),
       cfg_(std::move(cfg)),
-      phoneme_model_(std::make_unique<pronunciation::PhonemeModel>()),
-      pitch_tracker_user_(prosody::PitchTrackerConfig{/*sr*/ 16000}),
-      pitch_tracker_piper_(prosody::PitchTrackerConfig{/*sr*/ 22050}) {}
+      picker_(store, make_picker_cfg(cfg_)),
+      scoring_(make_scoring_cfg(app_cfg_, cfg_)),
+      reference_(make_reference_cfg(piper_model_path, cfg_)),
+      progress_logger_(progress) {}
 
 PronunciationDrillProcessor::~PronunciationDrillProcessor() = default;
 
 void PronunciationDrillProcessor::set_phoneme_model_for_test(
     std::unique_ptr<pronunciation::PhonemeModel> m) {
-    phoneme_model_ = std::move(m);
-    g2p_ = std::make_unique<pronunciation::G2P>(phoneme_model_->vocab());
+    scoring_.set_phoneme_model_for_test(std::move(m));
     loaded_ = true;
 }
 
 void PronunciationDrillProcessor::set_sentences_for_test(std::vector<std::string> s) {
-    sentence_pool_ = std::move(s);
+    picker_.set_pool(std::move(s));
+}
+
+void PronunciationDrillProcessor::set_reference_for_test(
+    std::string reference,
+    pronunciation::G2PResult plan,
+    prosody::PitchContour reference_contour) {
+    current_reference_ = std::move(reference);
+    test_plan_ = std::move(plan);
+    test_plan_set_ = true;
+    current_reference_contour_ = std::move(reference_contour);
 }
 
 const pronunciation::PhonemeVocab& PronunciationDrillProcessor::vocab() const {
-    return phoneme_model_->vocab();
+    return scoring_.vocab();
 }
 
 bool PronunciationDrillProcessor::load() {
-    // Model + vocab.
-    pronunciation::PhonemeModelConfig mc;
-    mc.model_path = app_cfg_.pronunciation.model_path;
-    mc.vocab_path = app_cfg_.pronunciation.vocab_path;
-    mc.provider = app_cfg_.pronunciation.onnx_provider;
-
-    const bool model_ok = phoneme_model_->load(mc);
-    if (!model_ok) {
-        std::cerr << "[PronunciationDrill] phoneme model unavailable — scoring will be degraded."
-                  << std::endl;
-    }
-    g2p_ = std::make_unique<pronunciation::G2P>(phoneme_model_->vocab());
+    const bool model_ok = scoring_.load();
 
     // Sentences: try config file first, then DB documents(kind='drill'), then fallback.
-    if (sentence_pool_.empty()) {
-        if (!app_cfg_.pronunciation.drill_sentences_path.empty()) {
-            sentence_pool_ = load_sentences_from_file(app_cfg_.pronunciation.drill_sentences_path);
-        }
+    std::vector<std::string> pool;
+    if (!picker_.empty()) {
+        // Pool was pre-injected (tests) — keep it as-is.
+        loaded_ = model_ok;
+        return model_ok;
     }
-    if (sentence_pool_.empty() && store_) {
-        sentence_pool_ = store_->sample_drill_sentences(50);
+    if (!app_cfg_.pronunciation.drill_sentences_path.empty()) {
+        pool = load_sentences_from_file(app_cfg_.pronunciation.drill_sentences_path);
     }
-    if (sentence_pool_.empty()) {
-        sentence_pool_ = cfg_.fallback_sentences;
+    if (pool.empty() && store_) {
+        pool = store_->sample_drill_sentences(50);
+    }
+    if (pool.empty()) {
+        pool = cfg_.fallback_sentences;
     }
 
     // Randomise order so sessions do not always start with the same sentence.
     std::random_device rd;
     std::mt19937 rng(rd());
-    std::shuffle(sentence_pool_.begin(), sentence_pool_.end(), rng);
+    std::shuffle(pool.begin(), pool.end(), rng);
+
+    // The picker's G2P reference is the one the scoring pipeline owns —
+    // we cannot access it directly, so we phonemize via a temporary G2P
+    // built against the same vocab.  This matches the pre-refactor
+    // behaviour where the index was built off a fresh G2P under `load()`.
+    pronunciation::G2P index_g2p(scoring_.vocab());
+    picker_.load(std::move(pool), &index_g2p);
 
     loaded_ = model_ok;
     return model_ok;
 }
 
 bool PronunciationDrillProcessor::available() const {
-    return loaded_ && phoneme_model_ && phoneme_model_->available();
-}
-
-std::string PronunciationDrillProcessor::next_sentence_() {
-    if (sentence_pool_.empty()) return {};
-    const std::string& s = sentence_pool_[next_sentence_idx_ % sentence_pool_.size()];
-    ++next_sentence_idx_;
-    return s;
-}
-
-std::vector<float> PronunciationDrillProcessor::int16_to_float_(
-    const std::vector<int16_t>& in) {
-    std::vector<float> out(in.size());
-    constexpr float kInvMax = 1.0f / 32768.0f;
-    for (std::size_t i = 0; i < in.size(); ++i) {
-        out[i] = static_cast<float>(in[i]) * kInvMax;
-    }
-    return out;
-}
-
-void PronunciationDrillProcessor::compute_reference_pitch_(const std::string& text) {
-    current_reference_contour_ = {};
-    std::vector<int16_t> samples;
-    int sr = 0;
-    if (!piper_synthesize_to_buffer(text, piper_model_path_, samples, sr)) {
-        std::cerr << "[PronunciationDrill] Piper failed to synthesise reference." << std::endl;
-        return;
-    }
-    const auto floats = int16_to_float_(samples);
-
-    prosody::PitchTrackerConfig pcfg;
-    pcfg.sample_rate = sr > 0 ? sr : 22050;
-    pcfg.frame_hop_samples = pcfg.sample_rate / 100;   // 10 ms
-    pcfg.frame_size_samples = std::max(512, pcfg.sample_rate / 16);
-    pitch_tracker_piper_ = prosody::PitchTracker(pcfg);
-    current_reference_contour_ = pitch_tracker_piper_.track(floats);
-
-    // Replay the audio so the learner hears the target.  This uses the same
-    // int16 path as piper_speak_and_play, but avoids regenerating.
-    sdl_play_s16_mono_22k(samples);
+    return loaded_ && scoring_.available();
 }
 
 std::string PronunciationDrillProcessor::pick_and_announce() {
-    current_reference_ = next_sentence_();
+    current_reference_ = picker_.next();
     if (current_reference_.empty()) return {};
     std::cout << "🎯 Reference: " << current_reference_ << std::endl;
-    compute_reference_pitch_(current_reference_);
+    current_reference_contour_ = reference_.announce(current_reference_);
     return current_reference_;
 }
 
 Action PronunciationDrillProcessor::score(
     const std::vector<float>& user_pcm_16k,
     const std::string& transcript) {
-
-    PronunciationFeedbackAction fb;
-    fb.reference = current_reference_;
-    fb.transcript = transcript;
 
     if (current_reference_.empty()) {
         Action a;
@@ -198,80 +164,19 @@ Action PronunciationDrillProcessor::score(
         return a;
     }
 
-    if (!g2p_) g2p_ = std::make_unique<pronunciation::G2P>(phoneme_model_->vocab());
-    const auto plan = g2p_->phonemize(current_reference_);
+    const pronunciation::G2PResult* plan_override = test_plan_set_ ? &test_plan_ : nullptr;
+    auto outcome = scoring_.run(current_reference_,
+                                transcript,
+                                user_pcm_16k,
+                                plan_override,
+                                current_reference_contour_);
 
-    pronunciation::Emissions emissions;
-    if (phoneme_model_) {
-        emissions = phoneme_model_->infer(user_pcm_16k);
-    }
+    progress_logger_.log(current_reference_,
+                         transcript,
+                         outcome.pron,
+                         outcome.intonation);
 
-    pronunciation::AlignResult align;
-    if (!plan.empty() && !emissions.logits.empty()) {
-        align = aligner_.align(emissions, plan.flat_ids());
-    }
-
-    pronunciation::PronunciationScore pron;
-    if (align.ok) {
-        pron = pron_scorer_.score(plan, align, emissions.frame_stride_ms);
-    }
-
-    // Intonation: YIN on the learner PCM at 16 kHz.
-    prosody::IntonationScore into;
-    if (!current_reference_contour_.empty()) {
-        const auto learner_contour = pitch_tracker_user_.track(user_pcm_16k);
-        into = intonation_scorer_.score(current_reference_contour_, learner_contour);
-    } else {
-        into.issues.emplace_back("No reference pitch contour — skipping intonation.");
-    }
-
-    fb.pron_overall_0_100 = pron.overall_0_100;
-    fb.intonation_overall_0_100 = into.overall_0_100;
-    fb.intonation_issues = into.issues;
-
-    // Rank words worst-first and keep the 2 lowest scorers (non-empty words only).
-    std::vector<const pronunciation::WordScore*> ranked;
-    ranked.reserve(pron.words.size());
-    for (const auto& w : pron.words) {
-        if (!w.phonemes.empty()) ranked.push_back(&w);
-    }
-    std::sort(ranked.begin(), ranked.end(),
-              [](const pronunciation::WordScore* a, const pronunciation::WordScore* b) {
-                  return a->score_0_100 < b->score_0_100;
-              });
-    const std::size_t n_low = std::min<std::size_t>(ranked.size(), 2);
-    for (std::size_t i = 0; i < n_low; ++i) {
-        const auto& w = *ranked[i];
-        PronunciationFeedbackAction::LowWord lw;
-        lw.word = w.word;
-        lw.score_0_100 = w.score_0_100;
-        std::string ipa;
-        ipa.reserve(w.phonemes.size() * 2);
-        ipa.push_back('/');
-        for (const auto& p : w.phonemes) ipa += p.ipa;
-        ipa.push_back('/');
-        lw.hint_ipa = std::move(ipa);
-        fb.lowest_words.push_back(std::move(lw));
-    }
-
-    // Persistence.
-    if (progress_) {
-        std::vector<std::pair<std::string, float>> per_phoneme;
-        per_phoneme.reserve(align.segments.size());
-        for (const auto& w : pron.words) {
-            for (const auto& p : w.phonemes) {
-                per_phoneme.emplace_back(p.ipa, p.score_0_100);
-            }
-        }
-        progress_->log_pronunciation(current_reference_,
-                                     transcript,
-                                     fb.pron_overall_0_100,
-                                     fb.intonation_overall_0_100,
-                                     build_phoneme_json(pron, into),
-                                     per_phoneme);
-    }
-
-    return fb.into_action(transcript);
+    return outcome.feedback.into_action(transcript);
 }
 
 } // namespace hecquin::learning

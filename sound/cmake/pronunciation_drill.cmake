@@ -22,6 +22,7 @@ set(DEFAULT_PRONUNCIATION_VOCAB_PATH
 
 add_executable(pronunciation_drill
     ${HECQUIN_SOUND_SRC_ROOT}/learning/cli/PronunciationDrillMain.cpp
+    ${HECQUIN_SOUND_SRC_ROOT}/learning/cli/LearningApp.cpp
 )
 target_link_libraries(pronunciation_drill PRIVATE
     hecquin_voice_pipeline

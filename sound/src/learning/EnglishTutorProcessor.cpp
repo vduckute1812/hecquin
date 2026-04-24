@@ -2,6 +2,8 @@
 
 #include "actions/GrammarCorrectionAction.hpp"
 #include "ai/HttpClient.hpp"
+#include "ai/HttpReplyBuckets.hpp"
+#include "ai/IHttpClient.hpp"
 #include "ai/OpenAiChatContent.hpp"
 #include "common/StringUtils.hpp"
 #include "learning/EmbeddingClient.hpp"
@@ -100,8 +102,11 @@ Action EnglishTutorProcessor::call_llm_(const std::string& user_text) {
     }
 
     const std::string body = build_chat_body_(trimmed, context);
-    const auto result = http_post_json(ai_.chat_completions_url, ai_.api_key, body,
-                                       cfg_.http_timeout_seconds);
+    const auto result = http_client_
+        ? http_client_->post_json(ai_.chat_completions_url, ai_.api_key, body,
+                                  cfg_.http_timeout_seconds)
+        : http_post_json(ai_.chat_completions_url, ai_.api_key, body,
+                         cfg_.http_timeout_seconds);
     if (!result) {
         GrammarCorrectionAction err;
         err.original = trimmed;
@@ -114,8 +119,7 @@ Action EnglishTutorProcessor::call_llm_(const std::string& user_text) {
         GrammarCorrectionAction err;
         err.original = trimmed;
         err.corrected = trimmed;
-        err.explanation = "The tutor service returned an error (HTTP " +
-                          std::to_string(result->status) + ").";
+        err.explanation = hecquin::ai::short_reply_for_status(result->status);
         progress_.log_interaction(trimmed, err.corrected, err.explanation);
         return err.into_action(trimmed);
     }

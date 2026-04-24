@@ -10,6 +10,13 @@ struct Action {
     std::string reply;
     /** Original or normalized user text that triggered this action. */
     std::string transcript;
+    /**
+     * Meaningful only for `LessonModeToggle` / `DrillModeToggle` actions:
+     * `true` means enter the mode, `false` means exit it.  Filled in by
+     * `LocalIntentMatcher` so downstream consumers don't have to re-run the
+     * regex on the transcript to figure out which direction the toggle went.
+     */
+    bool enable = false;
 };
 
 /** Short ASCII label for logs (not localized). */
@@ -25,8 +32,6 @@ struct Action {
             return "MusicSearch";
         case ActionKind::ExternalApi:
             return "ExternalApi";
-        case ActionKind::AssistantSdk:
-            return "AssistantSdk";
         case ActionKind::EnglishLesson:
             return "EnglishLesson";
         case ActionKind::LessonModeToggle:

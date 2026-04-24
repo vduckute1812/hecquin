@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <memory>
 #include <optional>
 #include <string>
 #include <vector>
@@ -9,6 +10,8 @@ struct sqlite3;
 struct sqlite3_stmt;
 
 namespace hecquin::learning {
+
+namespace detail { class StatementCache; }
 
 struct DocumentRecord {
     int64_t id = 0;
@@ -95,6 +98,14 @@ public:
     std::vector<std::string> sample_drill_sentences(int limit) const;
 
     /**
+     * Return up to `n` IPA phoneme tokens with the lowest rolling `avg_score`,
+     * restricted to rows that have been observed at least `min_attempts` times
+     * (so a single bad sample does not dominate the picker).  Sorted worst-
+     * first; empty when `phoneme_mastery` has no qualifying rows.
+     */
+    std::vector<std::string> weakest_phonemes(int n, int min_attempts = 2) const;
+
+    /**
      * Append one outbound API call log row (LLM/embedding/etc.). Written by the
      * C++ `LoggingHttpClient` decorator on every request; read by the dashboard
      * module to chart daily traffic, latency, and error rates.
@@ -112,11 +123,29 @@ public:
                          bool ok,
                          const std::string& error);
 
+    /**
+     * Append one internal pipeline event (VAD skip/pass, Whisper latency,
+     * Piper synth duration, drill alignment ok/fail, …).  `attrs_json` is
+     * an opaque JSON blob rendered by the caller — intended for extra
+     * per-event attributes (e.g. `{"no_speech_prob": 0.12}` on Whisper
+     * events).  Empty string stores `"{}"`.
+     */
+    void record_pipeline_event(const std::string& event,
+                               const std::string& outcome,
+                               long duration_ms,
+                               const std::string& attrs_json);
+
     const std::string& db_path() const { return db_path_; }
     int embedding_dim() const { return embedding_dim_; }
 
     /** Current schema version this build writes. Bump whenever DDL changes. */
-    static constexpr int kSchemaVersion = 2;
+    static constexpr int kSchemaVersion = 3;
+
+    /**
+     * @internal — statement cache shared across the LearningStore*.cpp TUs.
+     * Not part of the public API; do not consume from outside learning/.
+     */
+    detail::StatementCache* stmt_cache() const { return stmt_cache_.get(); }
 
 private:
     bool run_migrations_();
@@ -129,6 +158,9 @@ private:
     int embedding_dim_;
     sqlite3* db_ = nullptr;
     bool has_vec0_ = false;
+    // Declared as `unique_ptr` so the header doesn't need to know the full
+    // type.  Destroyed in ~LearningStore *before* the sqlite3 handle.
+    mutable std::unique_ptr<detail::StatementCache> stmt_cache_;
 };
 
 } // namespace hecquin::learning

@@ -56,6 +56,7 @@ struct LessonModeToggleAction {
                                                      : "Lesson mode off.")
                                  : reply;
         a.transcript = std::move(transcript);
+        a.enable = enable;
         return a;
     }
 };

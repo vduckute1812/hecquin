@@ -43,7 +43,9 @@ if (NOT TARGET hecquin_ai)
         ${HECQUIN_SOUND_SRC_ROOT}/ai/OpenAiChatContent.cpp
         ${HECQUIN_SOUND_SRC_ROOT}/ai/LocalIntentMatcher.cpp
         ${HECQUIN_SOUND_SRC_ROOT}/ai/ChatClient.cpp
+        ${HECQUIN_SOUND_SRC_ROOT}/ai/HttpReplyBuckets.cpp
         ${HECQUIN_SOUND_SRC_ROOT}/ai/LoggingHttpClient.cpp
+        ${HECQUIN_SOUND_SRC_ROOT}/ai/RetryingHttpClient.cpp
     )
     target_include_directories(hecquin_ai PUBLIC ${HECQUIN_SOUND_SRC_ROOT})
     target_link_libraries(hecquin_ai PUBLIC
@@ -61,13 +63,18 @@ if (NOT TARGET hecquin_voice_pipeline)
         ${HECQUIN_SOUND_SRC_ROOT}/voice/WhisperEngine.cpp
         ${HECQUIN_SOUND_SRC_ROOT}/voice/VoiceListener.cpp
         ${HECQUIN_SOUND_SRC_ROOT}/voice/VoiceApp.cpp
+        ${HECQUIN_SOUND_SRC_ROOT}/voice/SecondaryVadGate.cpp
+        ${HECQUIN_SOUND_SRC_ROOT}/voice/UtteranceCollector.cpp
+        ${HECQUIN_SOUND_SRC_ROOT}/voice/TtsResponsePlayer.cpp
+        ${HECQUIN_SOUND_SRC_ROOT}/voice/UtteranceRouter.cpp
         ${HECQUIN_SOUND_SRC_ROOT}/ai/CommandProcessor.cpp
     )
     target_include_directories(hecquin_voice_pipeline PUBLIC ${HECQUIN_SOUND_SRC_ROOT})
     target_link_libraries(hecquin_voice_pipeline PUBLIC
         hecquin_ai
         hecquin_deps_whisper
-        hecquin_deps_sdl2)
+        hecquin_deps_sdl2
+        hecquin_piper_speech)
     set_target_properties(hecquin_voice_pipeline PROPERTIES POSITION_INDEPENDENT_CODE ON)
 endif ()
 
@@ -84,7 +91,16 @@ if (HECQUIN_HAS_SQLITE AND NOT TARGET hecquin_learning)
         ${HECQUIN_SOUND_SRC_ROOT}/learning/store/LearningStoreApiCalls.cpp
         ${HECQUIN_SOUND_SRC_ROOT}/learning/EmbeddingClient.cpp
         ${HECQUIN_SOUND_SRC_ROOT}/learning/Ingestor.cpp
+        ${HECQUIN_SOUND_SRC_ROOT}/learning/ingest/FileDiscovery.cpp
+        ${HECQUIN_SOUND_SRC_ROOT}/learning/ingest/ContentFingerprint.cpp
+        ${HECQUIN_SOUND_SRC_ROOT}/learning/ingest/ChunkingStrategy.cpp
+        ${HECQUIN_SOUND_SRC_ROOT}/learning/ingest/ProseChunker.cpp
+        ${HECQUIN_SOUND_SRC_ROOT}/learning/ingest/JsonlChunker.cpp
+        ${HECQUIN_SOUND_SRC_ROOT}/learning/ingest/EmbeddingBatcher.cpp
+        ${HECQUIN_SOUND_SRC_ROOT}/learning/ingest/DocumentPersister.cpp
+        ${HECQUIN_SOUND_SRC_ROOT}/learning/ingest/ProgressReporter.cpp
         ${HECQUIN_SOUND_SRC_ROOT}/learning/TextChunker.cpp
+        ${HECQUIN_SOUND_SRC_ROOT}/learning/Vocabulary.cpp
         ${HECQUIN_SOUND_SRC_ROOT}/learning/RetrievalService.cpp
         ${HECQUIN_SOUND_SRC_ROOT}/learning/ProgressTracker.cpp
         ${HECQUIN_SOUND_SRC_ROOT}/learning/EnglishTutorProcessor.cpp
@@ -132,6 +148,10 @@ endif ()
 if (HECQUIN_HAS_SQLITE AND NOT TARGET hecquin_drill)
     add_library(hecquin_drill STATIC
         ${HECQUIN_SOUND_SRC_ROOT}/learning/PronunciationDrillProcessor.cpp
+        ${HECQUIN_SOUND_SRC_ROOT}/learning/pronunciation/drill/DrillSentencePicker.cpp
+        ${HECQUIN_SOUND_SRC_ROOT}/learning/pronunciation/drill/DrillReferenceAudio.cpp
+        ${HECQUIN_SOUND_SRC_ROOT}/learning/pronunciation/drill/DrillScoringPipeline.cpp
+        ${HECQUIN_SOUND_SRC_ROOT}/learning/pronunciation/drill/DrillProgressLogger.cpp
     )
     target_include_directories(hecquin_drill PUBLIC ${HECQUIN_SOUND_SRC_ROOT})
     target_link_libraries(hecquin_drill PUBLIC

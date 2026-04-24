@@ -1,12 +1,40 @@
 #include "voice/VoiceListener.hpp"
 
-#include "tts/PiperSpeech.hpp"
+#include "voice/SecondaryVadGate.hpp"
+#include "voice/TtsResponsePlayer.hpp"
+#include "voice/UtteranceCollector.hpp"
+#include "voice/UtteranceRouter.hpp"
 
-#include <cmath>
-#include <future>
+#include <algorithm>
+#include <chrono>
+#include <cstdlib>
 #include <iostream>
-#include <regex>
+#include <sstream>
 #include <thread>
+#include <utility>
+
+namespace {
+
+bool parse_float_env(const char* name, float& out) {
+    const char* raw = std::getenv(name);
+    if (!raw || *raw == '\0') return false;
+    try {
+        out = std::stof(raw);
+        return true;
+    } catch (...) {
+        std::cerr << "[voice] ignoring invalid " << name << "=" << raw << std::endl;
+        return false;
+    }
+}
+
+} // namespace
+
+void VoiceListenerConfig::apply_env_overrides() {
+    float v = 0.0f;
+    if (parse_float_env("HECQUIN_VAD_VOICE_RMS_THRESHOLD", v)) voice_rms_threshold = v;
+    if (parse_float_env("HECQUIN_VAD_MIN_VOICED_RATIO", v))    min_voiced_frame_ratio = v;
+    if (parse_float_env("HECQUIN_VAD_MIN_UTTERANCE_RMS", v))   min_utterance_rms = v;
+}
 
 VoiceListener::VoiceListener(WhisperEngine& whisper,
                              AudioCapture& capture,
@@ -19,191 +47,156 @@ VoiceListener::VoiceListener(WhisperEngine& whisper,
       commands_(commands),
       app_running_(app_running),
       piper_model_path_(std::move(piper_model_path)),
-      cfg_(cfg) {}
-
-float VoiceListener::rms(const std::vector<float>& samples, size_t start, size_t end) {
-    if (start >= end || end > samples.size()) {
-        return 0.0f;
-    }
-    float sum = 0.0f;
-    for (size_t i = start; i < end; ++i) {
-        sum += samples[i] * samples[i];
-    }
-    return std::sqrt(sum / static_cast<float>(end - start));
+      cfg_(cfg) {
+    collector_ = std::make_unique<hecquin::voice::UtteranceCollector>(
+        capture_, cfg_, app_running_);
+    player_ = std::make_unique<hecquin::voice::TtsResponsePlayer>(
+        capture_, piper_model_path_);
 }
 
-bool VoiceListener::voiceActive(const std::vector<float>& samples) const {
-    if (samples.size() < static_cast<size_t>(cfg_.vad_window_samples)) {
-        return false;
-    }
-    const size_t start = samples.size() - static_cast<size_t>(cfg_.vad_window_samples);
-    return rms(samples, start, samples.size()) > cfg_.voice_rms_threshold;
+VoiceListener::~VoiceListener() = default;
+
+VoiceListener::VadGateDecision VoiceListener::evaluate_secondary_gate(
+    int voiced_frames, int effective_frames, float mean_rms,
+    const VoiceListenerConfig& cfg) {
+    const auto d = hecquin::voice::evaluate_secondary_gate(
+        voiced_frames, effective_frames, mean_rms,
+        cfg.min_utterance_rms, cfg.min_voiced_frame_ratio);
+    return {d.accept, d.too_quiet, d.too_sparse, d.mean_rms, d.voiced_ratio};
 }
 
-std::string VoiceListener::sanitizeForTts(std::string s) {
-    s = std::regex_replace(s, std::regex(R"(\*{1,3})"), "");
-    s = std::regex_replace(s, std::regex(R"(^#{1,6}\s+)", std::regex_constants::multiline), "");
-    s = std::regex_replace(s, std::regex(R"(^[\-\*]\s+)", std::regex_constants::multiline), "");
-    s = std::regex_replace(s, std::regex(R"(^\d+\.\s+)", std::regex_constants::multiline), "");
-    s = std::regex_replace(s, std::regex(R"(`([^`]+)`)"), "$1");
-    s = std::regex_replace(s, std::regex(R"([\r\n\t]+)"), " ");
-    s = std::regex_replace(s, std::regex(R"( {2,})"), " ");
-
-    auto not_space = [](unsigned char c) { return !std::isspace(c); };
-    s.erase(s.begin(), std::find_if(s.begin(), s.end(), not_space));
-    s.erase(std::find_if(s.rbegin(), s.rend(), not_space).base(), s.end());
-    return s;
+const char* VoiceListener::current_mode_label_() const {
+    if (mode_ == ListenerMode::Lesson) return "lesson";
+    if (mode_ == ListenerMode::Drill) return "drill";
+    return "assistant";
 }
 
-void VoiceListener::speakReply(const Action& action) {
-    const char* mode_label = "assistant";
-    if (mode_ == ListenerMode::Lesson) mode_label = "lesson";
-    else if (mode_ == ListenerMode::Drill) mode_label = "drill";
-    std::cout << "🤖 Route: " << actionKindLabel(action.kind)
-              << "  mode=" << mode_label << std::endl;
-    if (action.reply.empty()) {
-        return;
+void VoiceListener::apply_local_intent_side_effects_(const Action& local) {
+    // Mode we fall back to when the user exits a temporary sub-mode.
+    // If their home is the very mode they're exiting, drop to Assistant
+    // so they aren't stuck (e.g. in english_tutor, "exit lesson" should
+    // actually exit lesson even though home is Lesson).
+    auto exit_target = [this](ListenerMode leaving) {
+        return home_mode_ == leaving ? ListenerMode::Assistant : home_mode_;
+    };
+
+    if (local.kind == ActionKind::LessonModeToggle) {
+        mode_ = local.enable ? ListenerMode::Lesson
+                             : exit_target(ListenerMode::Lesson);
+    } else if (local.kind == ActionKind::DrillModeToggle) {
+        mode_ = local.enable ? ListenerMode::Drill
+                             : exit_target(ListenerMode::Drill);
+        pending_drill_announce_ =
+            local.enable && static_cast<bool>(drill_announce_cb_);
     }
-
-    capture_.pauseDevice();
-    capture_.clearBuffer();
-
-    if (!piper_speak_and_play(sanitizeForTts(action.reply), piper_model_path_)) {
-        std::cerr << "🔇 TTS failed; reply text: " << action.reply << std::endl;
-    }
-
-    capture_.clearBuffer();
-    capture_.resumeDevice();
 }
 
-Action VoiceListener::routeUtterance(const Utterance& utterance) {
-    const std::string& transcript = utterance.transcript;
-
-    // Always give the fast local matcher a chance first — this is what lets the user
-    // switch modes by voice ("start english lesson" / "exit lesson" /
-    // "start pronunciation drill" / "exit drill") from any current mode.
-    if (auto local = commands_.match_local(transcript)) {
-        if (local->kind == ActionKind::LessonModeToggle) {
-            static const std::regex re_start(
-                R"(\b(start|begin|open)\s+(english\s+)?lesson\b)",
-                std::regex_constants::ECMAScript | std::regex_constants::icase);
-            mode_ = std::regex_search(transcript, re_start)
-                        ? ListenerMode::Lesson
-                        : ListenerMode::Assistant;
-        } else if (local->kind == ActionKind::DrillModeToggle) {
-            static const std::regex re_drill_start(
-                R"(\b(start|begin|open)\s+(pronunciation|drill)\b)",
-                std::regex_constants::ECMAScript | std::regex_constants::icase);
-            const bool enable = std::regex_search(transcript, re_drill_start);
-            mode_ = enable ? ListenerMode::Drill : ListenerMode::Assistant;
-            pending_drill_announce_ = enable && static_cast<bool>(drill_announce_cb_);
-        }
-        return *local;
+void VoiceListener::handle_vad_rejection_(const hecquin::voice::VadGateDecision& gate,
+                                          int speech_ms) {
+    if (gate.too_quiet) {
+        std::cout << "🔇 Skipping noise (too_quiet: mean_rms="
+                  << gate.mean_rms << " < " << cfg_.min_utterance_rms
+                  << ")" << std::endl;
     }
-
-    if (mode_ == ListenerMode::Drill && drill_cb_) {
-        return drill_cb_(utterance);
+    if (gate.too_sparse) {
+        std::cout << "🔇 Skipping noise (too_sparse: voiced_ratio="
+                  << gate.voiced_ratio << " < "
+                  << cfg_.min_voiced_frame_ratio << ")" << std::endl;
     }
-    if (mode_ == ListenerMode::Lesson && tutor_cb_) {
-        return tutor_cb_(utterance);
+    std::cout << std::endl;
+    if (event_sink_) {
+        // Tiny hand-rolled JSON — avoids pulling nlohmann into the
+        // voice library just for a couple of attrs.
+        std::ostringstream attrs;
+        attrs << "{\"reason\":\""
+              << (gate.too_quiet ? (gate.too_sparse ? "too_quiet+too_sparse" : "too_quiet")
+                                 : "too_sparse")
+              << "\",\"mean_rms\":" << gate.mean_rms
+              << ",\"voiced_ratio\":" << gate.voiced_ratio
+              << ",\"speech_ms\":" << speech_ms << "}";
+        event_sink_({"vad_gate", "skipped", speech_ms, attrs.str()});
     }
-    // Fall back to the external API (handled by the full `process` pipeline).
-    return commands_.process(transcript);
 }
 
 void VoiceListener::run() {
-    int silence_ms = 0;
-    bool collecting = false;
-    int speech_ms = 0;
-    int voiced_frames = 0;
-    int total_frames = 0;
-
     std::cout << "\n🎤 Listening... (Speak anytime!)" << std::endl;
     std::cout << "Press Ctrl+C to exit.\n" << std::endl;
 
     capture_.resumeDevice();
 
+    hecquin::voice::UtteranceRouter router(
+        commands_, mode_,
+        /*drill_cb=*/drill_cb_,
+        /*tutor_cb=*/tutor_cb_);
+
     while (app_running_.load()) {
-        const std::vector<float> live = capture_.snapshotBuffer();
-        const bool has_voice = voiceActive(live);
+        auto maybe = collector_->collect_next();
+        if (!maybe) break;
+        auto& utt = *maybe;
 
-        if (has_voice && !collecting) {
-            collecting = true;
-            speech_ms = 0;
-            silence_ms = 0;
-            voiced_frames = 0;
-            total_frames = 0;
-            std::cout << "🔴 Recording..." << std::endl;
+        // Secondary VAD gate: only hand the buffer to Whisper when the
+        // utterance was sustainedly voiced and loud enough on average.
+        // Subtract the terminal silence tail from the denominator so
+        // short utterances aren't unfairly punished.
+        const int tail_silence_frames =
+            cfg_.poll_interval_ms > 0 ? utt.silence_ms / cfg_.poll_interval_ms : 0;
+        const int effective_frames =
+            std::max(1, utt.total_frames - tail_silence_frames);
+        const float utt_rms =
+            utt.pcm.empty()
+                ? 0.0f
+                : hecquin::voice::UtteranceCollector::rms(utt.pcm, 0, utt.pcm.size());
+        const auto gate = hecquin::voice::evaluate_secondary_gate(
+            utt.voiced_frames, effective_frames, utt_rms,
+            cfg_.min_utterance_rms, cfg_.min_voiced_frame_ratio);
+
+        if (!gate.accept) {
+            handle_vad_rejection_(gate, utt.speech_ms);
+            capture_.clearBuffer();
+            std::this_thread::sleep_for(std::chrono::milliseconds(cfg_.poll_interval_ms));
+            continue;
         }
 
-        if (collecting) {
-            speech_ms += cfg_.poll_interval_ms;
-            ++total_frames;
-            if (has_voice) {
-                ++voiced_frames;
-                silence_ms = 0;
-            } else {
-                silence_ms += cfg_.poll_interval_ms;
-            }
-
-            if (speech_ms >= cfg_.min_speech_ms && silence_ms >= cfg_.end_silence_ms) {
-                collecting = false;
-                std::cout << "⏹ Recording complete!" << std::endl;
-
-                // Secondary VAD gate: only hand the buffer to Whisper when the
-                // utterance was *sustainedly* voiced and loud enough on
-                // average. This filters out music, background chatter, and
-                // whispered/rustling sounds whose RMS only briefly crosses
-                // the per-frame threshold.
-                const float voiced_ratio =
-                    total_frames > 0
-                        ? static_cast<float>(voiced_frames) /
-                              static_cast<float>(total_frames)
-                        : 0.0f;
-                const float utt_rms =
-                    live.empty() ? 0.0f : rms(live, 0, live.size());
-                const bool too_quiet =
-                    utt_rms < cfg_.min_utterance_rms;
-                const bool too_sparse =
-                    voiced_ratio < cfg_.min_voiced_frame_ratio;
-                if (too_quiet || too_sparse) {
-                    std::cout << "🔇 Skipping noise (voiced_ratio="
-                              << voiced_ratio << ", mean_rms=" << utt_rms
-                              << ")\n" << std::endl;
-                    capture_.clearBuffer();
-                    std::this_thread::sleep_for(
-                        std::chrono::milliseconds(cfg_.poll_interval_ms));
-                    continue;
-                }
-
-                const std::string transcript = whisper_.transcribe(live);
-                if (!transcript.empty()) {
-                    Utterance utterance{transcript, live};
-                    std::future<Action> fut = std::async(std::launch::async,
-                        [this, u = std::move(utterance)]() { return routeUtterance(u); });
-                    const Action action = fut.get();
-                    speakReply(action);
-                    // After a scored drill attempt, automatically announce the
-                    // next target sentence so the session flows without
-                    // requiring a new wake phrase between attempts.
-                    if (action.kind == ActionKind::PronunciationFeedback &&
-                        mode_ == ListenerMode::Drill && drill_announce_cb_) {
-                        pending_drill_announce_ = true;
-                    }
-                    if (pending_drill_announce_ && drill_announce_cb_) {
-                        pending_drill_announce_ = false;
-                        drill_announce_cb_();
-                    }
-                    std::cout << std::endl;
-                }
-
-                capture_.clearBuffer();
-                std::cout << "🎤 Listening again...\n" << std::endl;
-            }
+        const std::string transcript = whisper_.transcribe(utt.pcm);
+        if (event_sink_) {
+            std::ostringstream attrs;
+            attrs << "{\"no_speech_prob\":" << whisper_.last_no_speech_prob()
+                  << ",\"chars\":" << transcript.size()
+                  << ",\"speech_ms\":" << utt.speech_ms << "}";
+            event_sink_({"whisper",
+                         transcript.empty() ? "skipped" : "ok",
+                         whisper_.last_latency_ms(),
+                         attrs.str()});
         }
 
-        capture_.limitBufferSize(cfg_.buffer_max_seconds, cfg_.buffer_keep_seconds);
-        std::this_thread::sleep_for(std::chrono::milliseconds(cfg_.poll_interval_ms));
+        if (!transcript.empty()) {
+            Utterance utterance{transcript, utt.pcm};
+            const auto routed = router.route(utterance);
+            if (routed.from_local_intent) {
+                apply_local_intent_side_effects_(routed.action);
+            }
+            player_->speak(routed.action, current_mode_label_());
+
+            // After a scored drill attempt, automatically announce the
+            // next target sentence so the session flows without needing
+            // a new wake phrase between attempts.
+            if (routed.action.kind == ActionKind::PronunciationFeedback &&
+                mode_ == ListenerMode::Drill && drill_announce_cb_) {
+                pending_drill_announce_ = true;
+            }
+            if (pending_drill_announce_ && drill_announce_cb_) {
+                pending_drill_announce_ = false;
+                // The announce callback synthesises + plays the target
+                // sentence; use the same MuteGuard so we don't
+                // immediately re-detect our own speaker output.
+                AudioCapture::MuteGuard mute(capture_);
+                drill_announce_cb_();
+            }
+            std::cout << std::endl;
+        }
+
+        capture_.clearBuffer();
+        std::cout << "🎤 Listening again...\n" << std::endl;
     }
 
     capture_.pauseDevice();

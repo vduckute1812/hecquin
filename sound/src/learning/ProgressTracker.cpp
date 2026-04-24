@@ -1,5 +1,7 @@
 #include "learning/ProgressTracker.hpp"
 
+#include "learning/Vocabulary.hpp"
+
 #include <cctype>
 
 namespace hecquin::learning {
@@ -46,18 +48,26 @@ void ProgressTracker::close() {
 }
 
 std::vector<std::string> ProgressTracker::tokenize(const std::string& text) {
+    // Split on any non-word byte, then hand each run to the shared
+    // normaliser so tokenize/touch_vocab agree on the character class.
     std::vector<std::string> out;
     std::string cur;
     cur.reserve(24);
-    for (unsigned char c : text) {
-        if (std::isalpha(c) || c == '\'') {
-            cur.push_back(static_cast<char>(std::tolower(c)));
-        } else {
-            if (cur.size() >= 2) out.push_back(cur);
+    auto flush = [&] {
+        if (!cur.empty()) {
+            const std::string norm = Vocabulary::normalise(cur);
+            if (norm.size() >= 2) out.push_back(norm);
             cur.clear();
         }
+    };
+    for (unsigned char c : text) {
+        if (std::isalpha(c) || c == '\'') {
+            cur.push_back(static_cast<char>(c));
+        } else {
+            flush();
+        }
     }
-    if (cur.size() >= 2) out.push_back(std::move(cur));
+    flush();
     return out;
 }
 

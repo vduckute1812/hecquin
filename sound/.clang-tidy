@@ -1,0 +1,75 @@
+# clang-tidy configuration for the sound module.
+#
+# Enabled families are deliberately conservative — this is a warn-only lane in
+# CI, so the rules should flag things that almost always indicate real
+# defects (bugprone, readability, modernize, performance) while leaving
+# noisier checks (cppcoreguidelines, hicpp) off.  Enable them selectively as
+# the codebase converges on the happy path.
+
+Checks: >
+    -*,
+    bugprone-*,
+    cert-*,
+    clang-analyzer-*,
+    misc-const-correctness,
+    misc-redundant-expression,
+    misc-unused-parameters,
+    modernize-use-nullptr,
+    modernize-use-override,
+    modernize-use-equals-default,
+    modernize-use-equals-delete,
+    modernize-use-nodiscard,
+    modernize-avoid-bind,
+    modernize-make-unique,
+    modernize-make-shared,
+    modernize-loop-convert,
+    modernize-use-emplace,
+    performance-*,
+    readability-braces-around-statements,
+    readability-const-return-type,
+    readability-container-contains,
+    readability-container-size-empty,
+    readability-delete-null-pointer,
+    readability-function-cognitive-complexity,
+    readability-inconsistent-declaration-parameter-name,
+    readability-isolate-declaration,
+    readability-make-member-function-const,
+    readability-misleading-indentation,
+    readability-non-const-parameter,
+    readability-qualified-auto,
+    readability-redundant-access-specifiers,
+    readability-redundant-control-flow,
+    readability-redundant-declaration,
+    readability-redundant-function-ptr-dereference,
+    readability-redundant-member-init,
+    readability-redundant-preprocessor,
+    readability-redundant-smartptr-get,
+    readability-redundant-string-cstr,
+    readability-redundant-string-init,
+    readability-simplify-boolean-expr,
+    readability-static-accessed-through-instance,
+    readability-static-definition-in-anonymous-namespace,
+    readability-string-compare,
+    readability-uniqueptr-delete-release,
+    -bugprone-easily-swappable-parameters,
+    -bugprone-implicit-widening-of-multiplication-result,
+    -cert-err58-cpp,
+    -cert-env33-c,
+    -readability-function-cognitive-complexity,
+    -readability-magic-numbers
+
+WarningsAsErrors: ''
+FormatStyle: file
+HeaderFilterRegex: '^.*/sound/(src|tests)/.*\.(h|hpp)$'
+
+CheckOptions:
+  - key: readability-identifier-naming.ClassCase
+    value: CamelCase
+  - key: readability-identifier-naming.StructCase
+    value: CamelCase
+  - key: readability-identifier-naming.EnumCase
+    value: CamelCase
+  - key: readability-identifier-naming.NamespaceCase
+    value: lower_case
+  - key: performance-move-const-arg.CheckTriviallyCopyableMove
+    value: false

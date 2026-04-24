@@ -101,3 +101,39 @@ cmd_english_tutor() {
   (cd "$PROJECT_BUILD_DIR" && LD_LIBRARY_PATH="${WHISPER_INSTALL_DIR}/lib:${LD_LIBRARY_PATH:-}" ./english_tutor)
 }
 
+# Format every C/C++ source under sound/ using the in-repo .clang-format.
+# Accepts an optional list of paths — handy for editor integrations.
+cmd_fmt() {
+  if ! command -v clang-format >/dev/null 2>&1; then
+    echo "clang-format not found; install it via 'brew install clang-format' or 'apt install clang-format'."
+    exit 1
+  fi
+  shift || true
+  local paths=("$@")
+  if [[ ${#paths[@]} -eq 0 ]]; then
+    mapfile -t paths < <(find "$ROOT_DIR/src" "$ROOT_DIR/tests" \
+      -type f \( -name '*.cpp' -o -name '*.hpp' -o -name '*.cc' -o -name '*.hh' \))
+  fi
+  echo "Formatting ${#paths[@]} file(s) with clang-format..."
+  clang-format -i -style=file "${paths[@]}"
+  echo "✅ clang-format complete."
+}
+
+# Install the pre-commit hook as a symlink into the repo's .git/hooks/ dir so
+# edits to the tracked script are picked up without re-running the installer.
+cmd_hooks_install() {
+  local repo_root
+  repo_root="$(git -C "$ROOT_DIR" rev-parse --show-toplevel 2>/dev/null || true)"
+  if [[ -z "$repo_root" ]]; then
+    echo "dev.sh hooks:install must be run inside a git checkout."
+    exit 1
+  fi
+  local hook_src="$ROOT_DIR/scripts/pre-commit.sh"
+  local hook_dir="$repo_root/.git/hooks"
+  local hook_dst="$hook_dir/pre-commit"
+  mkdir -p "$hook_dir"
+  ln -sf "$hook_src" "$hook_dst"
+  chmod +x "$hook_src"
+  echo "✅ pre-commit hook installed: $hook_dst -> $hook_src"
+}
+

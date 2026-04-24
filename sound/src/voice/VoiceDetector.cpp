@@ -28,9 +28,17 @@ int main() {
     });
     if (!app.init()) return 1;
 
-    CommandProcessor commands(std::move(app.config().ai));
+    const auto& learn_cfg = app.config().learning;
+    auto matcher_cfg = hecquin::ai::LocalIntentMatcherConfig::from_phrase_lists(
+        learn_cfg.lesson_start_phrases,
+        learn_cfg.lesson_end_phrases,
+        learn_cfg.drill_start_phrases,
+        learn_cfg.drill_end_phrases);
+    CommandProcessor commands(std::move(app.config().ai), std::move(matcher_cfg));
+    VoiceListenerConfig vcfg;
+    vcfg.apply_env_overrides();
     VoiceListener listener(app.whisper(), app.capture(), commands,
-                           app.running(), app.piper_model_path());
+                           app.running(), app.piper_model_path(), vcfg);
     listener.run();
 
     app.shutdown();

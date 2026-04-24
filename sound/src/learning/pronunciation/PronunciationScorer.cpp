@@ -1,10 +1,43 @@
 #include "learning/pronunciation/PronunciationScorer.hpp"
 
+#include <nlohmann/json.hpp>
+
 #include <algorithm>
+#include <fstream>
+#include <iostream>
 
 namespace hecquin::learning::pronunciation {
 
-PronunciationScorer::PronunciationScorer(PronunciationScorerConfig cfg) : cfg_(cfg) {}
+bool PronunciationScorerConfig::load_calibration_json(const std::string& path) {
+    std::ifstream in(path);
+    if (!in) return false;
+    try {
+        nlohmann::json j;
+        in >> j;
+        if (!j.is_object()) return false;
+        // Schema: {"phonemes": {"<ipa>": {"min_logp": <float>, "max_logp": <float>}, …}}
+        // Bare top-level form {"<ipa>": {...}} is also accepted for convenience.
+        const auto& root = j.contains("phonemes") ? j["phonemes"] : j;
+        if (!root.is_object()) return false;
+        for (auto it = root.begin(); it != root.end(); ++it) {
+            const auto& v = it.value();
+            if (!v.is_object()) continue;
+            PhonemeCalibration cal;
+            cal.min_logp = v.value("min_logp", min_logp);
+            cal.max_logp = v.value("max_logp", max_logp);
+            if (cal.max_logp <= cal.min_logp) continue;
+            per_phoneme[it.key()] = cal;
+        }
+        return true;
+    } catch (const std::exception& e) {
+        std::cerr << "[PronunciationScorer] calibration JSON parse failed: "
+                  << e.what() << std::endl;
+        return false;
+    }
+}
+
+PronunciationScorer::PronunciationScorer(PronunciationScorerConfig cfg)
+    : cfg_(std::move(cfg)) {}
 
 float PronunciationScorer::logp_to_score(float logp) const {
     if (cfg_.max_logp <= cfg_.min_logp) return 0.0f;
@@ -13,9 +46,21 @@ float PronunciationScorer::logp_to_score(float logp) const {
     return t * 100.0f;
 }
 
+float PronunciationScorer::logp_to_score(float logp, const std::string& ipa) const {
+    if (!ipa.empty()) {
+        auto it = cfg_.per_phoneme.find(ipa);
+        if (it != cfg_.per_phoneme.end() && it->second.max_logp > it->second.min_logp) {
+            const float clamped = std::clamp(logp, it->second.min_logp, it->second.max_logp);
+            const float t = (clamped - it->second.min_logp)
+                          / (it->second.max_logp - it->second.min_logp);
+            return t * 100.0f;
+        }
+    }
+    return logp_to_score(logp);
+}
+
 PronunciationScore PronunciationScorer::score(const G2PResult& plan,
-                                              const AlignResult& alignment,
-                                              float frame_stride_ms) const {
+                                              const AlignResult& alignment) const {
     PronunciationScore out;
     if (!alignment.ok || plan.empty()) return out;
 
@@ -46,7 +91,7 @@ PronunciationScore PronunciationScorer::score(const G2PResult& plan,
             ps.ipa = pt.ipa.empty() ? std::string{} : pt.ipa;
             ps.start_frame = seg.start_frame;
             ps.end_frame = seg.end_frame;
-            ps.score_0_100 = logp_to_score(seg.log_posterior);
+            ps.score_0_100 = logp_to_score(seg.log_posterior, ps.ipa);
             word_sum += ps.score_0_100;
             ++word_count;
             w_end = std::max(w_end, seg.end_frame);
@@ -65,7 +110,6 @@ PronunciationScore PronunciationScorer::score(const G2PResult& plan,
     out.overall_0_100 = total_count > 0
         ? static_cast<float>(total_sum / static_cast<double>(total_count))
         : 0.0f;
-    (void)frame_stride_ms;  // reserved for future per-word timestamp reporting
     return out;
 }
 

@@ -17,11 +17,27 @@ enum class FinalDirection {
 struct IntonationScoreConfig {
     /** Length of the "final-phrase" window in ms for direction analysis. */
     float final_window_ms = 500.0f;
-    /** Hz change within the final window that counts as a rise / fall. */
-    float direction_delta_hz = 15.0f;
+    /**
+     * Minimum absolute pitch change across the final window that counts as a
+     * rise / fall.  Expressed in semitones so the threshold is perceptually
+     * symmetric between low-pitched and high-pitched voices (1 semitone ≈ 6 %
+     * of the base frequency).  Treat `≈ 1.5` as the default; anything smaller
+     * gets classified as `Flat`.
+     */
+    float direction_delta_semitones = 1.5f;
     /** Floor / ceiling for the 0..100 mapping of DTW distance (in semitone RMSE). */
     float worst_semitone_rmse = 6.0f;
     float best_semitone_rmse = 0.5f;
+    /**
+     * Sakoe–Chiba band radius as a fraction of max(N, M).  The optimal
+     * alignment between similar contours rarely drifts more than ~10 % of
+     * the sequence length off the diagonal, so restricting search to that
+     * band cuts DTW's runtime and memory from O(N·M) to O(N·r) without
+     * quality loss on prosody.  Values ≤ 0 fall back to unbanded DTW.
+     */
+    float band_ratio = 0.1f;
+    /** Absolute lower bound for the band radius, so very short contours still allow some warping. */
+    int band_min = 8;
 };
 
 struct IntonationScore {

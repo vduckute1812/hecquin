@@ -33,7 +33,7 @@ int main() {
     align.segments.push_back({11, 7, 10, -9.5f});    // aɪ — mispronounced (low logp)
 
     PronunciationScorer scorer;
-    const auto score = scorer.score(plan, align, /*frame_stride*/ 20.0f);
+    const auto score = scorer.score(plan, align);
 
     if (score.words.size() != 2) return fail("two word scores expected");
 
@@ -61,6 +61,22 @@ int main() {
     // A log-posterior at the floor should map to 0.
     if (scorer.logp_to_score(-20.0f) > 0.01f)
         return fail("logp below floor should clamp to 0");
+
+    // Per-phoneme calibration: apply a lenient window for "θ" only.  The
+    // same logp that maps to 0 under the default (-12, 0) anchors should
+    // map higher when "θ" is given a tighter floor.
+    {
+        PronunciationScorerConfig cfg;
+        cfg.per_phoneme["θ"] = PhonemeCalibration{-4.0f, 0.0f};
+        PronunciationScorer calibrated(cfg);
+        const float logp = -2.0f;
+        const float generic = calibrated.logp_to_score(logp);            // (-12, 0) → ~83
+        const float override_ = calibrated.logp_to_score(logp, "θ");     // (-4, 0) → 50
+        const float other     = calibrated.logp_to_score(logp, "s");     // no override → same as generic
+        if (override_ >= generic) return fail("tighter override should score lower");
+        if (other < generic - 0.01f || other > generic + 0.01f)
+            return fail("missing override should fall through to global");
+    }
 
     std::cout << "[test_pronunciation_scorer] OK" << std::endl;
     return 0;
