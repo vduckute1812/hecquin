@@ -60,6 +60,38 @@ int main() {
         const auto c = chunk_text("abcdefghij", 4, 9999);
         if (c.empty()) return fail("pathological overlap must still terminate");
     }
+    {
+        // Regression: chunker must never split inside a UTF-8 multi-byte
+        // sequence. nlohmann/json aborts with type_error 316 ("invalid UTF-8
+        // byte at index 0") when a chunk begins with an orphan continuation
+        // byte like 0xA0 (the tail of U+00A0 NON-BREAKING SPACE = 0xC2 0xA0).
+        //
+        // Build a long run of U+00A0 pairs so that naive byte-offset splits
+        // (with any step size) are virtually guaranteed to land mid-codepoint
+        // unless the chunker is UTF-8-aware.
+        std::string utf8;
+        for (int i = 0; i < 4000; ++i) utf8 += "\xC2\xA0";  // U+00A0
+        const auto c = chunk_text(utf8, 1800, 200);
+        if (c.empty()) return fail("utf8 chunker produced no chunks");
+        for (const auto& piece : c) {
+            // Every chunk must be valid UTF-8: it may not start or end with a
+            // continuation byte (10xxxxxx).
+            if (piece.empty()) continue;
+            const unsigned char first = static_cast<unsigned char>(piece.front());
+            const unsigned char last  = static_cast<unsigned char>(piece.back());
+            if ((first & 0xC0u) == 0x80u) {
+                return fail("utf8 chunk begins with an orphan continuation byte");
+            }
+            // For a 2-byte lead (110xxxxx) the next byte must be a continuation;
+            // we guarantee this by disallowing a chunk that ends on a bare
+            // lead byte. Same for 3- and 4-byte leads.
+            if ((last & 0xE0u) == 0xC0u ||  // 110xxxxx
+                (last & 0xF0u) == 0xE0u ||  // 1110xxxx
+                (last & 0xF8u) == 0xF0u) {  // 11110xxx
+                return fail("utf8 chunk ends on a bare lead byte (sequence truncated)");
+            }
+        }
+    }
     // ---- chunk_lines ---------------------------------------------------------
     {
         const auto c = chunk_lines("", 100);

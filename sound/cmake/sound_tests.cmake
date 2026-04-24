@@ -31,6 +31,10 @@ hecquin_add_unit_test(hecquin_sound_test_openai_chat
     ${HECQUIN_SOUND_SRC_ROOT}/ai/OpenAiChatContent.cpp)
 target_link_libraries(hecquin_sound_test_openai_chat PRIVATE hecquin_deps_json)
 
+# UTF-8 sanitizer (header-only) — regression for the 0xA0 CP-1252 crash.
+hecquin_add_unit_test(hecquin_sound_test_utf8
+    ${HECQUIN_SOUND_TEST_SRC_ROOT}/test_utf8.cpp)
+
 # LocalIntentMatcher regex matrix.
 hecquin_add_unit_test(hecquin_sound_test_local_intent
     ${HECQUIN_SOUND_TEST_SRC_ROOT}/test_local_intent_matcher.cpp)

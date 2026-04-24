@@ -5,11 +5,32 @@
 #include <nlohmann/json.hpp>
 
 #include <algorithm>
+#include <chrono>
 #include <iostream>
+#include <thread>
 
 namespace hecquin::learning {
 
 using nlohmann::json;
+
+namespace {
+
+// Number of POST attempts before giving up on a batch.  We retry on transport
+// failures (DNS, TLS, reset, read timeout) and on retryable HTTP status codes
+// (429 rate-limit, 5xx server errors, 408/425 timing).  A stable 429 from a
+// quota breach will still fail, but fixes hours-long ingests from dying on
+// one flaky packet.
+constexpr int kMaxAttempts = 4;
+// Exponential backoff base (ms): 500, 1000, 2000, 4000.
+constexpr int kBackoffBaseMs = 500;
+
+bool is_retryable_status(long status) {
+    if (status == 408 || status == 425 || status == 429) return true;
+    if (status >= 500 && status < 600) return true;
+    return false;
+}
+
+} // namespace
 
 EmbeddingClient::EmbeddingClient(AiClientConfig config)
     : config_(std::move(config)),
@@ -44,7 +65,10 @@ std::string EmbeddingClient::build_request_body(const std::string& model,
         // layer honours `dimensions` so we can keep the vec0 schema stable.
         body["dimensions"] = embedding_dim;
     }
-    return body.dump();
+    // `replace` swaps invalid UTF-8 bytes for U+FFFD instead of throwing.
+    // Ingestor already sanitizes upstream; this is belt-and-suspenders for
+    // any future caller that feeds raw user text straight into embed_many().
+    return body.dump(-1, ' ', false, json::error_handler_t::replace);
 }
 
 std::optional<std::vector<std::vector<float>>>
@@ -86,9 +110,32 @@ EmbeddingClient::embed_many(const std::vector<std::string>& texts) const {
     const std::string body =
         build_request_body(config_.embedding_model, texts, config_.embedding_dim);
 
-    const auto result = http_->post_json(config_.embeddings_url, config_.api_key, body);
+    std::optional<HttpResult> result;
+    for (int attempt = 1; attempt <= kMaxAttempts; ++attempt) {
+        result = http_->post_json(config_.embeddings_url, config_.api_key, body);
+
+        const bool transport_ok = result.has_value();
+        const bool status_ok = transport_ok && !is_retryable_status(result->status);
+        if (transport_ok && status_ok) {
+            break;
+        }
+
+        const bool last = (attempt == kMaxAttempts);
+        const int backoff_ms = kBackoffBaseMs * (1 << (attempt - 1));
+        std::cerr << "[EmbeddingClient] "
+                  << (transport_ok
+                          ? ("HTTP " + std::to_string(result->status))
+                          : std::string("transport failure"))
+                  << " on attempt " << attempt << "/" << kMaxAttempts;
+        if (!last) {
+            std::cerr << ", retrying in " << backoff_ms << "ms" << std::endl;
+            std::this_thread::sleep_for(std::chrono::milliseconds(backoff_ms));
+        } else {
+            std::cerr << ", giving up" << std::endl;
+        }
+    }
+
     if (!result) {
-        std::cerr << "[EmbeddingClient] transport failure" << std::endl;
         return std::nullopt;
     }
     if (result->status < 200 || result->status >= 300) {

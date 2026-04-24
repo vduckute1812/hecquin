@@ -1,5 +1,6 @@
 #include "learning/Ingestor.hpp"
 
+#include "common/Utf8.hpp"
 #include "learning/EmbeddingClient.hpp"
 #include "learning/store/LearningStore.hpp"
 #include "learning/TextChunker.hpp"
@@ -183,12 +184,17 @@ void Ingestor::ingest_file_(const std::string& path, const std::string& kind,
             ? "[" + std::to_string(file_index_) + "/" + std::to_string(total_files_) + "] "
             : std::string();
 
-    const std::string content = read_file(path);
+    std::string content = read_file(path);
     if (content.empty()) {
         ++report.files_skipped;
         std::cerr << prefix << "skip (empty): " << path << std::endl;
         return;
     }
+    // Scrub non-UTF-8 bytes (e.g. CP-1252 NBSP 0xA0 in vocabulary CSVs) before
+    // anything downstream sees them. nlohmann::json::dump(), SQLite's TEXT
+    // affinity, and the embedding API all assume valid UTF-8; letting raw
+    // Latin-1 bytes through used to abort the ingest with a json::type_error.
+    content = hecquin::common::sanitize_utf8(content);
     const std::string hash = content_fingerprint(content);
     if (!cfg_.force_rebuild && store_.is_file_already_ingested(path, hash)) {
         ++report.files_skipped;

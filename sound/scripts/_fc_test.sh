@@ -67,50 +67,13 @@ fetch() {
     mv "$dest.tmp" "$dest"
 }
 
-# Guarantee that $1 is valid UTF-8 in place. Downstream tools (nlohmann/json
-# in the C++ ingestor, most notably) abort on non-UTF-8 bytes, so mirrors
-# that ship Latin-1 or classic Mac-Roman (NGSL is Mac-Roman with CR line
-# endings) need to be re-encoded before they reach the ingest pipeline.
-#
-# The function is idempotent:
-#   * `iconv -f UTF-8 -t UTF-8 ... >/dev/null` succeeds iff the file is
-#     already valid UTF-8 → early return, no rewrite.
-#   * Otherwise we try Mac-Roman first (matches the classic-Mac CR flavour
-#     of NGSL) and fall back to Latin-1, which always produces valid UTF-8.
-#
-# Runs on every script invocation so existing caches from older versions of
-# this script are transparently upgraded the next time the user runs it —
-# no need to wipe `.env/shared/learning/curriculum/` manually.
-ensure_utf8() {
-    local file="$1"
-    [[ -f "$file" ]] || return 0
-    if iconv -f UTF-8 -t UTF-8 "$file" >/dev/null 2>&1; then
-        return 0
-    fi
-    local tmp="${file}.utf8"
-    if iconv -f MACROMAN -t UTF-8 "$file" > "$tmp" 2>/dev/null \
-       && iconv -f UTF-8 -t UTF-8 "$tmp" >/dev/null 2>&1; then
-        mv "$tmp" "$file"
-        log "re-encoded Mac-Roman → UTF-8: ${file#$ROOT_DIR/}"
-        return 0
-    fi
-    if iconv -f LATIN1 -t UTF-8 "$file" > "$tmp" 2>/dev/null; then
-        mv "$tmp" "$file"
-        log "re-encoded Latin-1 → UTF-8: ${file#$ROOT_DIR/}"
-        return 0
-    fi
-    rm -f "$tmp"
-    warn "could not re-encode to UTF-8: ${file#$ROOT_DIR/}"
-    return 1
-}
-
 # -----------------------------------------------------------------------------
 # Vocabulary lists
 # -----------------------------------------------------------------------------
 log "Fetching vocabulary wordlists..."
 
 # Oxford 3000 (text file, one word per line).
-fetch "https://raw.githubusercontent.com/gokhanyavas/Oxford-3000-Word-List/master/Oxford%203000%20Word%20List.txt" \
+fetch "https://raw.githubusercontent.com/gokhanyavas/DOES_NOT_EXIST/master/nope.txt" \
       "$LEARNING_DIR/vocabulary/oxford-3000.txt" || true
 
 # Oxford 5000 (text file; this mirror ships the 5000 list *excluding* the 3000,
@@ -119,12 +82,11 @@ fetch "https://raw.githubusercontent.com/tgmgroup/Word-List-from-Oxford-Longman-
       "$LEARNING_DIR/vocabulary/oxford-5000.txt" || true
 
 # NGSL (New General Service List) — CSV with headword + definition/frequency.
-# The upstream file is Mac-Roman with classic-Mac CR line endings; normalise
-# CR → LF so the text chunker treats each row as its own line. `LC_ALL=C`
-# makes `tr` operate on raw bytes so it doesn't choke on non-UTF8 bytes
-# (macOS `tr` defaults to the user's locale and will otherwise emit
-# "Illegal byte sequence"). Encoding is fixed by the blanket `ensure_utf8`
-# pass below, so downstream nlohmann/json doesn't abort on 0xCA NBSPs.
+# The upstream file is ISO-8859-1 with old Mac-style CR line endings; normalise
+# to LF so the downstream text chunker treats each row as its own line.
+# `LC_ALL=C` makes `tr` operate on raw bytes so it doesn't choke on non-UTF8
+# bytes (macOS `tr` defaults to the user's locale and will otherwise emit
+# "Illegal byte sequence").
 if fetch "https://raw.githubusercontent.com/evan-007/ngsl-dictionary/master/NGSL-Headwords-and-Definitions-byFreq.csv" \
          "$LEARNING_DIR/vocabulary/ngsl.csv"; then
     if [[ -f "$LEARNING_DIR/vocabulary/ngsl.csv" ]]; then
@@ -141,14 +103,6 @@ fetch "https://raw.githubusercontent.com/openlanguageprofiles/olp-en-cefrj/maste
 
 fetch "https://raw.githubusercontent.com/openlanguageprofiles/olp-en-cefrj/master/cefrj-vocabulary-profile-1.5.csv" \
       "$LEARNING_DIR/vocabulary/cefrj.csv" || true
-
-# Defensive UTF-8 pass over every vocabulary file — no-op on files that are
-# already valid UTF-8, transparently heals any mirror that ships Latin-1 /
-# Mac-Roman (past, present, or future). Also upgrades stale caches from
-# before this script learned about encoding normalisation.
-while IFS= read -r -d '' vocab_file; do
-    ensure_utf8 "$vocab_file" || true
-done < <(find "$LEARNING_DIR/vocabulary" -maxdepth 1 -type f -print0 2>/dev/null)
 
 # -----------------------------------------------------------------------------
 # Dictionary glosses

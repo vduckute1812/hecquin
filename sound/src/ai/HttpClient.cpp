@@ -3,6 +3,7 @@
 #ifdef HECQUIN_WITH_CURL
 #include <curl/curl.h>
 
+#include <iostream>
 #include <memory>
 #include <mutex>
 
@@ -46,6 +47,7 @@ std::optional<HttpResult> http_post_json(const std::string& url,
     CurlSlistPtr headers(raw_headers);
 
     std::string response;
+    char errbuf[CURL_ERROR_SIZE] = {0};
     curl_easy_setopt(curl.get(), CURLOPT_URL, url.c_str());
     curl_easy_setopt(curl.get(), CURLOPT_HTTPHEADER, headers.get());
     curl_easy_setopt(curl.get(), CURLOPT_POSTFIELDS, json_body.c_str());
@@ -53,9 +55,22 @@ std::optional<HttpResult> http_post_json(const std::string& url,
     curl_easy_setopt(curl.get(), CURLOPT_WRITEFUNCTION, write_to_string);
     curl_easy_setopt(curl.get(), CURLOPT_WRITEDATA, &response);
     curl_easy_setopt(curl.get(), CURLOPT_TIMEOUT, timeout_seconds);
+    // Give callers a human-readable reason for transport failures.
+    curl_easy_setopt(curl.get(), CURLOPT_ERRORBUFFER, errbuf);
+    // Fail fast on stalled connections (no bytes in/out for 20s).
+    curl_easy_setopt(curl.get(), CURLOPT_LOW_SPEED_LIMIT, 1L);
+    curl_easy_setopt(curl.get(), CURLOPT_LOW_SPEED_TIME, 20L);
+    // Reasonable connect budget; keeps the app responsive on bad DNS.
+    curl_easy_setopt(curl.get(), CURLOPT_CONNECTTIMEOUT, 15L);
 
     const CURLcode res = curl_easy_perform(curl.get());
     if (res != CURLE_OK) {
+        std::cerr << "[http] curl error " << static_cast<int>(res) << ": "
+                  << curl_easy_strerror(res);
+        if (errbuf[0] != '\0') {
+            std::cerr << " (" << errbuf << ")";
+        }
+        std::cerr << " url=" << url << std::endl;
         return std::nullopt;
     }
 

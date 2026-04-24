@@ -115,6 +115,8 @@ void VoiceListener::run() {
     int silence_ms = 0;
     bool collecting = false;
     int speech_ms = 0;
+    int voiced_frames = 0;
+    int total_frames = 0;
 
     std::cout << "\n🎤 Listening... (Speak anytime!)" << std::endl;
     std::cout << "Press Ctrl+C to exit.\n" << std::endl;
@@ -129,13 +131,16 @@ void VoiceListener::run() {
             collecting = true;
             speech_ms = 0;
             silence_ms = 0;
+            voiced_frames = 0;
+            total_frames = 0;
             std::cout << "🔴 Recording..." << std::endl;
         }
 
         if (collecting) {
             speech_ms += cfg_.poll_interval_ms;
-
+            ++total_frames;
             if (has_voice) {
+                ++voiced_frames;
                 silence_ms = 0;
             } else {
                 silence_ms += cfg_.poll_interval_ms;
@@ -144,6 +149,32 @@ void VoiceListener::run() {
             if (speech_ms >= cfg_.min_speech_ms && silence_ms >= cfg_.end_silence_ms) {
                 collecting = false;
                 std::cout << "⏹ Recording complete!" << std::endl;
+
+                // Secondary VAD gate: only hand the buffer to Whisper when the
+                // utterance was *sustainedly* voiced and loud enough on
+                // average. This filters out music, background chatter, and
+                // whispered/rustling sounds whose RMS only briefly crosses
+                // the per-frame threshold.
+                const float voiced_ratio =
+                    total_frames > 0
+                        ? static_cast<float>(voiced_frames) /
+                              static_cast<float>(total_frames)
+                        : 0.0f;
+                const float utt_rms =
+                    live.empty() ? 0.0f : rms(live, 0, live.size());
+                const bool too_quiet =
+                    utt_rms < cfg_.min_utterance_rms;
+                const bool too_sparse =
+                    voiced_ratio < cfg_.min_voiced_frame_ratio;
+                if (too_quiet || too_sparse) {
+                    std::cout << "🔇 Skipping noise (voiced_ratio="
+                              << voiced_ratio << ", mean_rms=" << utt_rms
+                              << ")\n" << std::endl;
+                    capture_.clearBuffer();
+                    std::this_thread::sleep_for(
+                        std::chrono::milliseconds(cfg_.poll_interval_ms));
+                    continue;
+                }
 
                 const std::string transcript = whisper_.transcribe(live);
                 if (!transcript.empty()) {

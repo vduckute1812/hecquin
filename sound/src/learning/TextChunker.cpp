@@ -6,6 +6,29 @@
 
 namespace hecquin::learning {
 
+namespace {
+
+// UTF-8 continuation bytes have the top two bits set to 10xxxxxx. A codepoint
+// boundary is any byte whose top two bits are NOT 10 (i.e., ASCII or a lead
+// byte). Splitting inside a multi-byte sequence produces bytes that are
+// invalid UTF-8 on their own — downstream nlohmann/json aborts with
+// type_error 316 when the embedding request is serialised.
+inline bool is_utf8_continuation(unsigned char b) {
+    return (b & 0xC0u) == 0x80u;
+}
+
+// Advance `pos` forward until it sits on a codepoint boundary (or EOF).
+// Never moves beyond `text.size()`.
+size_t align_up_to_codepoint(const std::string& text, size_t pos) {
+    while (pos < text.size() &&
+           is_utf8_continuation(static_cast<unsigned char>(text[pos]))) {
+        ++pos;
+    }
+    return pos;
+}
+
+} // namespace
+
 std::vector<std::string> chunk_text(const std::string& text, int chunk_chars, int overlap) {
     std::vector<std::string> out;
     if (text.empty()) return out;
@@ -14,7 +37,8 @@ std::vector<std::string> chunk_text(const std::string& text, int chunk_chars, in
     if (overlap >= chunk_chars) overlap = chunk_chars / 4;
 
     const size_t step = static_cast<size_t>(chunk_chars - overlap);
-    for (size_t i = 0; i < text.size(); i += step) {
+    size_t i = 0;
+    while (i < text.size()) {
         size_t end = std::min(text.size(), i + static_cast<size_t>(chunk_chars));
         if (end < text.size()) {
             size_t soft = end;
@@ -26,12 +50,23 @@ std::vector<std::string> chunk_text(const std::string& text, int chunk_chars, in
                 end = soft;
             }
         }
+        // Never cut inside a UTF-8 multi-byte sequence: if `end` landed on a
+        // continuation byte, include the rest of the codepoint. Safe even at
+        // EOF because align_up clamps to text.size().
+        end = align_up_to_codepoint(text, end);
+
         std::string piece = text.substr(i, end - i);
         size_t a = 0, b = piece.size();
         while (a < b && std::isspace(static_cast<unsigned char>(piece[a]))) ++a;
         while (b > a && std::isspace(static_cast<unsigned char>(piece[b - 1]))) --b;
         if (b > a) out.emplace_back(piece.substr(a, b - a));
         if (end >= text.size()) break;
+
+        // Advance by `step`, then realign to a codepoint boundary so the
+        // next chunk doesn't begin with an orphan continuation byte.
+        size_t next = align_up_to_codepoint(text, i + step);
+        if (next <= i) next = end;  // guarantee forward progress
+        i = next;
     }
     return out;
 }

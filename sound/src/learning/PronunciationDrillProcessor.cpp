@@ -56,7 +56,9 @@ std::string build_phoneme_json(const pronunciation::PronunciationScore& pron,
     }
     auto& issues = j["issues"] = nlohmann::json::array();
     for (const auto& s : into.issues) issues.push_back(s);
-    return j.dump();
+    // `replace` guards against the IPA / word text containing stray non-UTF-8
+    // bytes (e.g. if a future vocab source feeds bad input through G2P).
+    return j.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace);
 }
 
 }  // namespace

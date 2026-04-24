@@ -18,6 +18,13 @@ struct VoiceListenerConfig {
     int poll_interval_ms = 50;
     int buffer_max_seconds = 30;
     int buffer_keep_seconds = 10;
+    // Fraction of poll frames during collection that must register as voiced.
+    // Low-energy rustling or brief music spikes rarely exceed ~20 %, while
+    // actual speech is typically 50–90 %.  Set to 0 to disable.
+    float min_voiced_frame_ratio = 0.35f;
+    // Minimum mean-RMS over the whole collected utterance.  Rejects whispers
+    // and faint background chatter that briefly crossed the VAD threshold.
+    float min_utterance_rms = 0.015f;
 };
 
 enum class ListenerMode {

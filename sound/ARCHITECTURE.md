@@ -141,16 +141,26 @@ every 50 ms:
         collecting = true
 
     if collecting:
-        speech_ms  += 50
-        silence_ms  = has_voice ? 0 : silence_ms + 50
+        speech_ms   += 50
+        total_frames += 1
+        voiced_frames += (has_voice ? 1 : 0)
+        silence_ms   = has_voice ? 0 : silence_ms + 50
 
         if speech_ms >= 500 and silence_ms >= 800:
-            transcript = whisper.transcribe(samples)
-            future     = commands.process_async(transcript)
-            action     = future.get()
-            capture.pauseDevice()
-            piper_speak_and_play(action.reply)
-            capture.resumeDevice()
+            # Secondary gate: drop music / whispers / rustling that only
+            # briefly crossed the per-frame threshold.
+            voiced_ratio = voiced_frames / total_frames
+            utt_rms      = sqrt(mean(samples²))
+            if utt_rms < 0.015 or voiced_ratio < 0.35:
+                clearBuffer(); continue
+
+            transcript = whisper.transcribe(samples)  # may return "" (noise)
+            if transcript is not empty:
+                future = commands.process_async(transcript)
+                action = future.get()
+                capture.pauseDevice()
+                piper_speak_and_play(action.reply)
+                capture.resumeDevice()
             collecting = false
 
     capture.limitBufferSize(30s max, keep 10s)
@@ -166,10 +176,34 @@ Configuration (`VoiceListenerConfig`):
 | `end_silence_ms` | 800 | Silence duration that marks end of speech |
 | `buffer_max_seconds` | 30 | Buffer trim trigger |
 | `buffer_keep_seconds` | 10 | Samples kept after trim |
+| `min_voiced_frame_ratio` | 0.35 | Minimum fraction of poll frames that must register as voiced during collection; rejects brief noise spikes and music |
+| `min_utterance_rms` | 0.015 | Minimum mean RMS over the whole collected utterance; rejects whispers / rustling / faint background chatter |
 
 ### WhisperEngine
 
-RAII wrapper around `whisper_context`. Loads a GGML model at construction. `transcribe()` runs greedy decoding on a float32 sample vector and returns joined segment text. Language is hard-coded to English. Known Whisper noise tokens (`[BLANK_AUDIO]`, `[NO_SPEECH]`, `[ Inaudible Remark ]`, etc.) are filtered out — `transcribe()` returns an empty string for these.
+RAII wrapper around `whisper_context`. Loads a GGML model at construction.
+`transcribe()` runs greedy decoding on a float32 sample vector and returns
+joined segment text (language hard-coded to English). Three layers of
+noise/hallucination filtering run on the decoder output before it is handed
+back to the listener — `transcribe()` returns an empty string when any gate
+trips:
+
+1. **Decoder bias** — `suppress_blank`, `suppress_nst` (non-speech tokens),
+   `no_speech_thold = 0.6`, and `logprob_thold = -1.0` make Whisper itself
+   prefer to emit nothing when the audio is silence, music, or static.
+2. **Pattern-based annotation stripper** — Whisper emits bracketed
+   non-speech markers over noise/music (`[MUSIC]`, `[NOISE]`, `[SOUND]`,
+   `[BLANK_AUDIO]`, `[Music playing]`, `(applause)`, `(laughter)` …). A
+   single regex `\[[^\]\[]*\]|\([^\)\(]*\)` strips *any* such annotation
+   (including future variants) from the decoded text. If the remainder is
+   empty — or has fewer than 2 alphanumeric characters — the utterance is
+   treated as noise and `transcribe()` returns an empty string. Otherwise
+   the stripped, trimmed text is returned (so a real sentence mixed with an
+   incidental `[Music]` still comes through, cleaned).
+3. **No-speech-probability gate** — even if the text looks speech-shaped,
+   any segment whose `whisper_full_get_segment_no_speech_prob()` exceeds
+   0.6 causes the whole utterance to be rejected, defending against
+   hallucinated words on ambient noise.
 
 ### CommandProcessor
 
@@ -186,7 +220,13 @@ A thin façade composing two collaborators, seeded from `AiClientConfig`:
 2. **`ChatClient`** (`src/ai/ChatClient.*`) — remote LLM call against an
    OpenAI-compatible `/chat/completions` endpoint. JSON is built with
    **nlohmann/json**; transport is delegated to an **`IHttpClient`** reference
-   (default `CurlHttpClient`, injectable for tests).
+   (default `CurlHttpClient`, injectable for tests). On failure (missing API
+   key, transport error, non-2xx HTTP status, unparseable body) `ask()`
+   returns an `ExternalApiAction` carrying a **short, user-friendly spoken
+   reply** (mapped per status bucket: auth / not-found / timeout / busy /
+   server / parse) while the raw response body, URL, and status code are
+   logged to `stderr`. This keeps Piper from reading multi-kilobyte JSON
+   error payloads aloud while preserving full diagnostics for operators.
 
 `CommandProcessor::process()` / `process_async()` try the local matcher first,
 then fall back to `ChatClient::ask()`. The system prompt is loaded at startup

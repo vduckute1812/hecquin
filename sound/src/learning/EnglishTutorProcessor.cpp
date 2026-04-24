@@ -73,7 +73,9 @@ std::string EnglishTutorProcessor::build_chat_body_(const std::string& user_text
             {{"role", "user"},   {"content", user_text}},
         })},
     };
-    return body.dump();
+    // RAG context can contain stray non-UTF-8 bytes from ingested corpora;
+    // replace them with U+FFFD rather than aborting the tutor turn.
+    return body.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace);
 }
 
 Action EnglishTutorProcessor::call_llm_(const std::string& user_text) {
