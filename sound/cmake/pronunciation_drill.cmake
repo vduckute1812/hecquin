@@ -28,7 +28,8 @@ target_link_libraries(pronunciation_drill PRIVATE
     hecquin_voice_pipeline
     hecquin_learning
     hecquin_drill
-    hecquin_piper_speech)
+    hecquin_piper_speech
+    hecquin_music)
 
 hecquin_set_runtime_defaults(pronunciation_drill)
 target_compile_definitions(pronunciation_drill PRIVATE

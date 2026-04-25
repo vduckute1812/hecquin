@@ -184,7 +184,9 @@ The voice detector listens on the default microphone, detects speech activity, t
 | ------------------------------------------ | ------------------------ | ----------------------------------------------------------------- |
 | `turn on` / `turn off` + `air` or `switch` | `LocalDevice`            | Short confirmation (e.g. turning air on/off)                      |
 | `tell me a story`                          | `InteractionTopicSearch` | Prompt to choose a story / topic                                  |
-| `open music`                               | `InteractionMusicSearch` | Prompt for music intent                                           |
+| `open music`                               | `MusicSearchPrompt`      | "What music would you like to play?" — enters `ListenerMode::Music` |
+| *(next utterance in `Music` mode)*         | `MusicPlayback`          | "Now playing …" (or an error) after yt-dlp + ffmpeg stream finishes |
+| `cancel` / `stop` / `exit music`           | `MusicPlayback`          | Cancels the pending music search and exits `Music` mode           |
 | *(no match)*                               | `ExternalApi`            | Assistant text from the HTTP API (or an error / disabled message) |
 
 
@@ -215,6 +217,26 @@ The voice detector listens on the default microphone, detects speech activity, t
 | `HECQUIN_LOG_FORMAT`                       | `pretty` (default) or `json` (one JSON object per log line) |
 
 **System prompt:** The AI system prompt is loaded from `.env/prompts/system_prompt.txt` at startup. Edit this file to change the assistant's personality or response style without recompiling. If the file is missing, a built-in default is used.
+
+**Music playback (YouTube Music):**
+
+`open music` starts a two-turn flow: the assistant asks *"What music would you like to play?"* and the next utterance is forwarded to the configured `MusicProvider`. The default provider is **YouTube Music**, implemented by shelling out to `yt-dlp` and piping through `ffmpeg` to produce mono int16 PCM that feeds `StreamingSdlPlayer`. Apple Music and any other provider can plug in through the same `MusicProvider` interface in `src/music/`.
+
+Prerequisites on the deploy target (mac dev, Raspberry Pi prod):
+
+- `yt-dlp` (recommended: `pipx install yt-dlp` or `brew install yt-dlp` / `apt install yt-dlp` on newer distros).
+- `ffmpeg` (`brew install ffmpeg` / `apt install ffmpeg`).
+- Optional: a Netscape-format cookies file exported from a browser signed into your YouTube Premium Google account. Point `HECQUIN_YT_COOKIES_FILE` at it for ad-free, high-bitrate streams. Without it the provider still works but falls back to anonymous access.
+
+| Variable                       | Purpose                                                              |
+| ------------------------------ | -------------------------------------------------------------------- |
+| `HECQUIN_MUSIC_PROVIDER`       | `youtube` (default). Unknown values fall back to YouTube.            |
+| `HECQUIN_YT_COOKIES_FILE`      | Path to Netscape-format cookies.txt for Premium auth. Empty = anon.  |
+| `HECQUIN_YT_DLP_BIN`           | Override the `yt-dlp` binary (default: look up on `$PATH`).          |
+| `HECQUIN_FFMPEG_BIN`           | Override the `ffmpeg` binary (default: look up on `$PATH`).          |
+| `HECQUIN_MUSIC_SAMPLE_RATE`    | PCM rate for SDL playback (default `44100`).                         |
+
+Limitations (v1): `play()` is synchronous — the microphone stays muted for the full duration of the song, so "stop music" mid-playback is not yet supported over voice. Ctrl+C on the CLI, or the built-in signal handler, will still abort the `yt-dlp | ffmpeg` subprocess cleanly.
 
 
 Use any provider that exposes the same JSON shape as OpenAI `/v1/chat/completions` (adjust base URL accordingly). The client does not call the native Gemini JSON API; it works with Google’s **OpenAI-compatible** Gemini host (see below).

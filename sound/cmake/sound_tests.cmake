@@ -155,3 +155,12 @@ hecquin_add_unit_test(hecquin_sound_test_utterance_router
 target_link_libraries(hecquin_sound_test_utterance_router PRIVATE
     hecquin_voice_pipeline
     hecquin_piper_speech)
+
+# MusicSession: provider contract (search → play → Action) via a fake.
+# Does not link SDL-level bits — the FakeMusicProvider sidesteps
+# StreamingSdlPlayer, and capture is passed as nullptr so AudioCapture
+# is never constructed.
+hecquin_add_unit_test(hecquin_sound_test_music_session
+    ${HECQUIN_SOUND_TEST_SRC_ROOT}/test_music_session.cpp)
+target_link_libraries(hecquin_sound_test_music_session PRIVATE
+    hecquin_music)

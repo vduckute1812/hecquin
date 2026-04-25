@@ -44,6 +44,14 @@ enum class ListenerMode {
     Assistant,
     Lesson,
     Drill,
+    /**
+     * Entered when the local matcher resolves "open music".  The next
+     * utterance is treated as a song query (routed to `music_cb_`) and
+     * the listener returns to `home_mode_` after the resulting
+     * `MusicPlayback` action is emitted — mirroring the short-lived
+     * lifecycle of `Drill`.
+     */
+    Music,
 };
 
 /**
@@ -63,6 +71,13 @@ using TutorCallback = std::function<Action(const Utterance&)>;
 
 /** Callback that provides an opening prompt whenever the listener enters drill mode. */
 using DrillAnnounceCallback = std::function<void()>;
+
+/**
+ * Callback invoked when an utterance arrives while the listener is in
+ * `ListenerMode::Music`.  Receives just the transcript (music playback
+ * does not need the PCM buffer) and returns a `MusicPlayback` action.
+ */
+using MusicCallback = std::function<Action(const std::string& query)>;
 
 /**
  * Sink for one internal pipeline event — wired to
@@ -118,6 +133,13 @@ public:
 
     /** Optional hook invoked when the listener enters drill mode (announce the first sentence). */
     void setDrillAnnounceCallback(DrillAnnounceCallback cb) { drill_announce_cb_ = std::move(cb); }
+
+    /**
+     * Install a music-session handler.  Without one, `open music` still
+     * acknowledges (MusicSearchPrompt reply is spoken) but the follow-up
+     * song query falls through to the chat fallback.
+     */
+    void setMusicCallback(MusicCallback cb) { music_cb_ = std::move(cb); }
 
     /** Optional per-event telemetry sink. */
     void setPipelineEventSink(PipelineEventSink s) { event_sink_ = std::move(s); }
@@ -175,6 +197,7 @@ private:
     TutorCallback tutor_cb_;
     TutorCallback drill_cb_;
     DrillAnnounceCallback drill_announce_cb_;
+    MusicCallback music_cb_;
     PipelineEventSink event_sink_;
     std::atomic<bool>& app_running_;
     std::string piper_model_path_;

@@ -106,5 +106,18 @@ AppConfig AppConfig::load(const char* env_file_path, const char* prompts_dir) {
     const std::string espeak_voice = store.resolve("HECQUIN_ESPEAK_VOICE");
     if (!espeak_voice.empty()) cfg.locale.espeak_voice = espeak_voice;
 
+    const std::string music_provider = store.resolve("HECQUIN_MUSIC_PROVIDER");
+    if (!music_provider.empty()) cfg.music.provider = music_provider;
+    const std::string yt_cookies = store.resolve("HECQUIN_YT_COOKIES_FILE");
+    if (!yt_cookies.empty()) cfg.music.cookies_file = yt_cookies;
+    const std::string yt_dlp_bin = store.resolve("HECQUIN_YT_DLP_BIN");
+    if (!yt_dlp_bin.empty()) cfg.music.yt_dlp_binary = yt_dlp_bin;
+    const std::string ffmpeg_bin = store.resolve("HECQUIN_FFMPEG_BIN");
+    if (!ffmpeg_bin.empty()) cfg.music.ffmpeg_binary = ffmpeg_bin;
+    const std::string music_rate = store.resolve("HECQUIN_MUSIC_SAMPLE_RATE");
+    if (!music_rate.empty()) {
+        try { cfg.music.sample_rate_hz = std::stoi(music_rate); } catch (...) {}
+    }
+
     return cfg;
 }

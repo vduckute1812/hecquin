@@ -13,7 +13,8 @@ add_executable(voice_detector
 
 target_link_libraries(voice_detector PRIVATE
     hecquin_voice_pipeline
-    hecquin_piper_speech)
+    hecquin_piper_speech
+    hecquin_music)
 
 hecquin_set_runtime_defaults(voice_detector)
 hecquin_adhoc_codesign(voice_detector)

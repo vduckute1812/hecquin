@@ -31,11 +31,14 @@ namespace hecquin::voice {
 class UtteranceRouter {
 public:
     using ModeAwareCallback = std::function<Action(const Utterance&)>;
+    /** Music callback — takes the raw transcript, returns a playback action. */
+    using MusicCallback = std::function<Action(const std::string&)>;
 
     UtteranceRouter(CommandProcessor& commands,
                     const ListenerMode& mode,
                     ModeAwareCallback drill_cb,
-                    ModeAwareCallback tutor_cb);
+                    ModeAwareCallback tutor_cb,
+                    MusicCallback music_cb = {});
 
     struct Result {
         Action action;
@@ -50,6 +53,7 @@ private:
     const ListenerMode& mode_;
     ModeAwareCallback drill_cb_;
     ModeAwareCallback tutor_cb_;
+    MusicCallback     music_cb_;
 };
 
 } // namespace hecquin::voice

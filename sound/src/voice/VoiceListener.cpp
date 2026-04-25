@@ -68,6 +68,7 @@ VoiceListener::VadGateDecision VoiceListener::evaluate_secondary_gate(
 const char* VoiceListener::current_mode_label_() const {
     if (mode_ == ListenerMode::Lesson) return "lesson";
     if (mode_ == ListenerMode::Drill) return "drill";
+    if (mode_ == ListenerMode::Music) return "music";
     return "assistant";
 }
 
@@ -88,6 +89,15 @@ void VoiceListener::apply_local_intent_side_effects_(const Action& local) {
                              : exit_target(ListenerMode::Drill);
         pending_drill_announce_ =
             local.enable && static_cast<bool>(drill_announce_cb_);
+    } else if (local.kind == ActionKind::MusicSearchPrompt) {
+        // Enter a short-lived "awaiting song name" mode.  The next
+        // utterance is interpreted as the query, handled by music_cb_,
+        // and produces a MusicPlayback action that restores home_mode_.
+        mode_ = ListenerMode::Music;
+    } else if (local.kind == ActionKind::MusicPlayback) {
+        // Either the session finished playing / failed, or the user said
+        // "cancel music".  Either way, leave Music mode.
+        mode_ = exit_target(ListenerMode::Music);
     }
 }
 
@@ -127,7 +137,8 @@ void VoiceListener::run() {
     hecquin::voice::UtteranceRouter router(
         commands_, mode_,
         /*drill_cb=*/drill_cb_,
-        /*tutor_cb=*/tutor_cb_);
+        /*tutor_cb=*/tutor_cb_,
+        /*music_cb=*/music_cb_);
 
     while (app_running_.load()) {
         auto maybe = collector_->collect_next();
@@ -172,9 +183,13 @@ void VoiceListener::run() {
         if (!transcript.empty()) {
             Utterance utterance{transcript, utt.pcm};
             const auto routed = router.route(utterance);
-            if (routed.from_local_intent) {
-                apply_local_intent_side_effects_(routed.action);
-            }
+            // Side effects run for any action that can flip listener
+            // state (Lesson/Drill toggles always come from local intent;
+            // MusicPlayback can also be emitted by the music_cb_ at the
+            // end of a song, so we intentionally do not gate on
+            // `from_local_intent` here — the function itself switches
+            // on `kind`).
+            apply_local_intent_side_effects_(routed.action);
             player_->speak(routed.action, current_mode_label_());
 
             // After a scored drill attempt, automatically announce the

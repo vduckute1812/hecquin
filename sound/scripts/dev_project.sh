@@ -7,12 +7,30 @@ jobs_count() {
 cmd_deps() {
   echo "Installing dependencies..."
   if [[ "$(uname)" == "Darwin" ]]; then
-    brew install cmake git sdl2 espeak-ng sqlite
+    # ffmpeg + yt-dlp back the "open music" voice intent; both are
+    # invoked as subprocesses from hecquin_music so skipping them only
+    # breaks music playback — everything else still builds.
+    brew install cmake git sdl2 espeak-ng sqlite ffmpeg yt-dlp
   else
     sudo apt update
     sudo apt install -y build-essential cmake pkg-config git libsdl2-dev libcurl4-openssl-dev \
-      espeak-ng libespeak-ng-dev libsqlite3-dev
+      espeak-ng libespeak-ng-dev libsqlite3-dev ffmpeg
+    # yt-dlp is intentionally *not* from apt (Debian / Ubuntu tend to
+    # ship months-old releases that break with current YouTube signing).
+    # Prefer pipx; fall back to a user-local pip if pipx is missing.
+    if command -v pipx >/dev/null 2>&1; then
+      pipx install --force yt-dlp
+    else
+      echo "⚠️  pipx not found; installing yt-dlp via 'pip install --user'."
+      echo "    Consider: sudo apt install -y pipx  && pipx ensurepath"
+      python3 -m pip install --user --upgrade yt-dlp
+    fi
   fi
+  echo ""
+  echo "Optional (music auth): export HECQUIN_YT_COOKIES_FILE=<path>"
+  echo "  A Netscape-format cookies.txt exported from a browser signed"
+  echo "  into your YouTube Premium Google account unlocks ad-free,"
+  echo "  high-bitrate streams.  Leave unset for anonymous playback."
 }
 
 cmd_build() {

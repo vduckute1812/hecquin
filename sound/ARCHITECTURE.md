@@ -40,7 +40,8 @@ CommandProcessor
     ├── Local regex matching (no network, instant; patterns from `AppConfig`)
     │       "turn on/off" + device        → DeviceAction
     │       "tell me a story"             → TopicSearchAction
-    │       "open music"                  → MusicAction
+    │       "open music"                  → MusicAction::prompt  (enters Music mode)
+    │       "cancel/stop/exit music"      → MusicAction::cancel  (leaves Music mode)
     │       "start english lesson" / "exit lesson" → LessonModeToggle
     │       "start pronunciation drill" / "exit drill" → DrillModeToggle
     │
@@ -132,17 +133,17 @@ src/
 │   │   └── IntonationScorer.hpp/cpp — semitone DTW + final-direction rule
 │   └── cli/                      — `LearningApp` shared bootstrap + `english_ingest`, `english_tutor`, `pronunciation_drill` entries
 ├── actions/
-│   ├── ActionKind.hpp            — enum: None / LocalDevice / TopicSearch / Music / ExternalApi / EnglishLesson / GrammarCorrection / LessonModeToggle / PronunciationFeedback / DrillModeToggle
+│   ├── ActionKind.hpp            — enum: None / LocalDevice / TopicSearch / MusicSearchPrompt / MusicPlayback / ExternalApi / EnglishLesson / GrammarCorrection / LessonModeToggle / PronunciationFeedback / DrillModeToggle
 │   ├── Action.hpp                — {kind, reply, transcript}
 │   ├── DeviceAction.hpp          — power control confirmation text
 │   ├── ExternalApiAction.hpp     — wraps API response
 │   ├── TopicSearchAction.hpp     — story/topic prompt
-│   ├── MusicAction.hpp           — music intent
+│   ├── MusicAction.hpp           — music intent: prompt / playback / cancel helpers
 │   ├── PronunciationFeedbackAction.hpp — drill score + weakest-phoneme feedback + DrillModeToggle
 │   └── NoneAction.hpp            — empty transcript guard
 ├── config/
 │   ├── ConfigStore.hpp/cpp       — dotenv loader (env vars take precedence)
-│   ├── AppConfig.hpp/cpp         — top-level config container (`ai`, `audio`, `learning`, `pronunciation`, `locale`)
+│   ├── AppConfig.hpp/cpp         — top-level config container (`ai`, `audio`, `learning`, `pronunciation`, `locale`, `music`)
 │   └── ai/AiClientConfig.hpp/cpp — OpenAI-compatible HTTP client settings
 └── tts/
     ├── PiperSpeech.hpp/cpp       — thin facade (public C-style API unchanged)
@@ -361,7 +362,8 @@ A thin façade composing two collaborators, seeded from `AiClientConfig`:
    listener never re-runs the same regex to decide which toggle fired:
    - `turn on|turn off` + `air|switch` → `ActionKind::LocalDevice`
    - `tell me a story` → `ActionKind::InteractionTopicSearch`
-   - `open music` → `ActionKind::InteractionMusicSearch`
+   - `open music` → `ActionKind::MusicSearchPrompt` (enters `ListenerMode::Music`)
+   - `cancel|stop|exit music` → `ActionKind::MusicPlayback` (exits `Music` mode)
    - lesson toggles → `ActionKind::LessonModeToggle`
    - drill toggles → `ActionKind::DrillModeToggle`
 
@@ -502,7 +504,8 @@ per-utterance shell fork/exec cost on the assistant / tutor reply path.
 | `None` | Empty transcript | Empty |
 | `LocalDevice` | Device regex match | "Okay, turn on/off the …" |
 | `InteractionTopicSearch` | Story regex match | User prompt text |
-| `InteractionMusicSearch` | Music regex match | User prompt text |
+| `MusicSearchPrompt` | `open music` regex match | "What music would you like to play?" — enters `ListenerMode::Music` |
+| `MusicPlayback` | `MusicSession` (after yt-dlp + ffmpeg) or `cancel/stop/exit music` | "Now playing …" / apology / cancellation; restores previous `ListenerMode` |
 | `ExternalApi` | HTTP API call | API assistant reply |
 | `EnglishLesson` | (reserved — lesson-mode cue) | — |
 | `GrammarCorrection` | `EnglishTutorProcessor` (Lesson mode) | "You said … / Better … / Reason …" |
@@ -577,6 +580,55 @@ Key preprocessor defines set by CMake:
 Whisper/Piper models are shared across platforms in `.env/shared/models/`. Default model
 paths (Whisper GGML, Piper voice, config file, system prompt) and the `dev.sh` command
 cheat sheet are documented in [`README.md`](./README.md).
+
+---
+
+## Music Subsystem
+
+`src/music/` turns "open music" into a two-turn conversation:
+
+1. `LocalIntentMatcher` resolves `open music` → `MusicAction::prompt`. The
+   listener switches to `ListenerMode::Music` via
+   `apply_local_intent_side_effects_` and TTS speaks *"What music would you
+   like to play?"*.
+2. The next utterance arrives in `Music` mode. `UtteranceRouter` forwards
+   the transcript to `MusicCallback` (the Music mode branch runs before
+   Drill / Lesson so a user in an active learning session can still detour
+   into music). The callback lives in `MusicSession::handle`, which mutes
+   the mic with `AudioCapture::MuteGuard`, asks the injected
+   `MusicProvider` to search, then to play, and finally emits a
+   `MusicPlayback` action that drops the listener back into `home_mode_`.
+
+**Providers (`MusicProvider` interface).** Extensible by design:
+
+- **`YouTubeMusicProvider`** (default) — shells out to `yt-dlp` for both
+  search (`ytsearch1:<query> music`) and playback. Playback pipes
+  `yt-dlp -f bestaudio -o - | ffmpeg -f s16le -ac 1 -ar <rate>` into the
+  existing `StreamingSdlPlayer`, so the entire audio path reuses the SDL2
+  producer / consumer ring already used for Piper TTS. Auth is optional:
+  if `HECQUIN_YT_COOKIES_FILE` points at a Netscape-format cookies file
+  exported from a browser signed into YouTube Premium, both subprocesses
+  receive `--cookies <path>` for ad-free + higher-bitrate streams.
+- **Apple Music (future)** — plugs in as another `MusicProvider` with no
+  changes to the listener, matcher, router, or session.
+
+`MusicFactory::make_provider_from_config` selects the back-end from
+`AppConfig::music::provider` (default `"youtube"`). Unknown names fall
+back to YouTube with a warning so a typo can't silently disable music.
+
+**Configuration** (all optional; defaults match a macOS / Raspberry Pi
+Homebrew / apt install):
+
+- `HECQUIN_MUSIC_PROVIDER`
+- `HECQUIN_YT_COOKIES_FILE`
+- `HECQUIN_YT_DLP_BIN`, `HECQUIN_FFMPEG_BIN`
+- `HECQUIN_MUSIC_SAMPLE_RATE`
+
+**Cancellation.** `cancel music` / `stop music` / `exit music` are part of
+the built-in regex alternations, so the user can bail out before
+supplying a song name. Mid-playback cancellation via voice is blocked by
+the `MuteGuard` (documented limitation); SIGINT / shutdown cleanly kills
+the `yt-dlp | ffmpeg` subprocess and finalises the SDL player.
 
 ---
 

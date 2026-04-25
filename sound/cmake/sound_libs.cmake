@@ -55,6 +55,22 @@ if (NOT TARGET hecquin_ai)
     set_target_properties(hecquin_ai PROPERTIES POSITION_INDEPENDENT_CODE ON)
 endif ()
 
+# ---- hecquin_music -----------------------------------------------------------
+# yt-dlp + ffmpeg powered music search & streaming playback.  Split out
+# so the voice / learning binaries can opt-in without pulling music into
+# the pure-AI test targets.  Depends on SDL (via hecquin_piper_speech,
+# which owns StreamingSdlPlayer) and on voice_pipeline only for the
+# AudioCapture::MuteGuard implementation — providers that don't mute
+# won't use that symbol.  The dependency on voice_pipeline is declared
+# below, after that target, so the order of `add_library` calls matters.
+#
+# Sources are declared here but the target itself is added after
+# hecquin_voice_pipeline so the PUBLIC dependency can be satisfied.
+set(HECQUIN_MUSIC_SOURCES
+    ${HECQUIN_SOUND_SRC_ROOT}/music/MusicSession.cpp
+    ${HECQUIN_SOUND_SRC_ROOT}/music/MusicFactory.cpp
+    ${HECQUIN_SOUND_SRC_ROOT}/music/YouTubeMusicProvider.cpp)
+
 # ---- hecquin_voice_pipeline --------------------------------------------------
 # Microphone capture → whisper.cpp → VoiceListener → CommandProcessor.
 if (NOT TARGET hecquin_voice_pipeline)
@@ -76,6 +92,21 @@ if (NOT TARGET hecquin_voice_pipeline)
         hecquin_deps_sdl2
         hecquin_piper_speech)
     set_target_properties(hecquin_voice_pipeline PROPERTIES POSITION_INDEPENDENT_CODE ON)
+endif ()
+
+# ---- hecquin_music (registered after hecquin_voice_pipeline / piper_speech) --
+if (NOT TARGET hecquin_music)
+    add_library(hecquin_music STATIC ${HECQUIN_MUSIC_SOURCES})
+    target_include_directories(hecquin_music PUBLIC ${HECQUIN_SOUND_SRC_ROOT})
+    # PUBLIC config so MusicConfig in the headers is visible to consumers;
+    # PUBLIC voice_pipeline so AudioCapture::MuteGuard definitions resolve
+    # at final-link time; PUBLIC piper_speech so StreamingSdlPlayer does
+    # the same for the SDL playback pipeline.
+    target_link_libraries(hecquin_music PUBLIC
+        hecquin_config
+        hecquin_voice_pipeline
+        hecquin_piper_speech)
+    set_target_properties(hecquin_music PROPERTIES POSITION_INDEPENDENT_CODE ON)
 endif ()
 
 # ---- hecquin_learning --------------------------------------------------------

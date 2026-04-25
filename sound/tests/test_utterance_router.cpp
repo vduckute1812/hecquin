@@ -187,6 +187,60 @@ int main() {
                "null drill callback falls through to chat fallback");
     }
 
+    // ------------------------------------------------------------------
+    // 6. Music mode forwards to the music callback (query only).
+    // ------------------------------------------------------------------
+    {
+        ListenerMode mode = ListenerMode::Music;
+        int music_calls = 0;
+        std::string last_query;
+        UtteranceRouter router(
+            commands, mode,
+            /*drill_cb=*/nullptr,
+            /*tutor_cb=*/nullptr,
+            /*music_cb=*/[&](const std::string& q) {
+                ++music_calls;
+                last_query = q;
+                Action a;
+                a.kind  = ActionKind::MusicPlayback;
+                a.reply = "music-handler";
+                return a;
+            });
+
+        auto r = router.route(make_utt("bohemian rhapsody"));
+        expect(!r.from_local_intent, "music callback is not local intent");
+        expect(music_calls == 1, "Music mode reaches music callback");
+        expect(last_query == "bohemian rhapsody",
+               "music callback receives raw transcript as query");
+        expect(r.action.kind == ActionKind::MusicPlayback,
+               "music callback returns MusicPlayback action");
+    }
+
+    // ------------------------------------------------------------------
+    // 7. Local intent still wins in Music mode — "cancel music" must
+    //    short-circuit before the music callback is consulted.
+    // ------------------------------------------------------------------
+    {
+        ListenerMode mode = ListenerMode::Music;
+        int music_calls = 0;
+        UtteranceRouter router(
+            commands, mode,
+            /*drill_cb=*/nullptr,
+            /*tutor_cb=*/nullptr,
+            /*music_cb=*/[&](const std::string&) {
+                ++music_calls;
+                return Action{};
+            });
+
+        auto r = router.route(make_utt("cancel music"));
+        expect(r.from_local_intent,
+               "cancel music goes through local intent");
+        expect(music_calls == 0,
+               "local intent short-circuits in Music mode");
+        expect(r.action.kind == ActionKind::MusicPlayback,
+               "cancel music yields MusicPlayback (cancelled) action");
+    }
+
     if (failures == 0) {
         std::cout << "[test_utterance_router] all assertions passed" << std::endl;
         return 0;

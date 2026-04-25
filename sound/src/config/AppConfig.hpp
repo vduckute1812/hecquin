@@ -54,12 +54,31 @@ struct LocaleConfig {
     std::string espeak_voice = "en-us";
 };
 
+/**
+ * Music session settings.  `provider` currently accepts "youtube"
+ * (default) — extra values (e.g. "apple") plug in through the
+ * `MusicProvider` interface without touching this struct.
+ *
+ * `cookies_file`, when non-empty and readable, is passed to yt-dlp as
+ * `--cookies <path>` so a YouTube Premium Google account can skip ads
+ * and get higher-bitrate streams.  An empty / missing file silently
+ * degrades to anonymous access.
+ */
+struct MusicConfig {
+    std::string provider = "youtube";
+    std::string cookies_file;
+    std::string yt_dlp_binary = "yt-dlp";
+    std::string ffmpeg_binary = "ffmpeg";
+    int sample_rate_hz = 44100;
+};
+
 struct AppConfig {
     AiClientConfig ai;
     AudioCaptureConfig audio;
     LearningConfig learning;
     PronunciationConfig pronunciation;
     LocaleConfig locale;
+    MusicConfig music;
 
     static AppConfig load(const char* env_file_path = ConfigStore::kDefaultPath,
                           const char* prompts_dir = nullptr);

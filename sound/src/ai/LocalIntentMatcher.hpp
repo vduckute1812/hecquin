@@ -22,6 +22,13 @@ struct LocalIntentMatcherConfig {
         R"(^\s*(turn on|turn off)\s+(air|switch)\b)";
     std::string story_pattern = R"(\btell me a story\b)";
     std::string music_pattern = R"(\bopen music\b)";
+    /**
+     * "cancel music" / "stop music" / "exit music" — lets the user back out
+     * of `ListenerMode::Music` without giving a song name.  Kept distinct
+     * from the lesson / drill exits so phrasings don't leak across modes.
+     */
+    std::string music_cancel_pattern =
+        R"(\b(cancel|stop|exit|close)\s+music\b)";
     std::string lesson_start_pattern =
         R"(\b(start|begin|open)\s+(english\s+)?lesson\b)";
     std::string lesson_end_pattern =

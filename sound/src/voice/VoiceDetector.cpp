@@ -1,4 +1,6 @@
 #include "ai/CommandProcessor.hpp"
+#include "music/MusicFactory.hpp"
+#include "music/MusicSession.hpp"
 #include "voice/VoiceApp.hpp"
 #include "voice/VoiceListener.hpp"
 
@@ -39,6 +41,16 @@ int main() {
     vcfg.apply_env_overrides();
     VoiceListener listener(app.whisper(), app.capture(), commands,
                            app.running(), app.piper_model_path(), vcfg);
+
+    // Music provider + session — shells out to yt-dlp/ffmpeg.  Using a
+    // factory keeps the choice of back-end (YouTube today, Apple Music
+    // later) config-driven rather than hardcoded at the call site.
+    auto music_provider = hecquin::music::make_provider_from_config(app.config().music);
+    hecquin::music::MusicSession music_session(*music_provider, &app.capture());
+    listener.setMusicCallback([&music_session](const std::string& q) {
+        return music_session.handle(q);
+    });
+
     listener.run();
 
     app.shutdown();

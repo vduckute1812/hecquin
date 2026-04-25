@@ -2,6 +2,8 @@
 #include "learning/PronunciationDrillProcessor.hpp"
 #include "learning/cli/LearningApp.hpp"
 #include "learning/store/LearningStore.hpp"
+#include "music/MusicFactory.hpp"
+#include "music/MusicSession.hpp"
 #include "voice/VoiceListener.hpp"
 
 #include <iostream>
@@ -48,6 +50,13 @@ int main() {
                            app.voice().running(), app.piper_model_path(), vcfg);
     app.wire_pipeline_sink(listener);
     app.wire_drill_callbacks(listener);
+
+    auto music_provider = hecquin::music::make_provider_from_config(cfg.music);
+    hecquin::music::MusicSession music_session(*music_provider, &app.voice().capture());
+    listener.setMusicCallback([&music_session](const std::string& q) {
+        return music_session.handle(q);
+    });
+
     listener.setInitialMode(ListenerMode::Drill);
 
     // Speak the first sentence immediately so the user is not greeted by silence.

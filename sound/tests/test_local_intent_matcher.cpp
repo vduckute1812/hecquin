@@ -36,8 +36,20 @@ int main() {
     }
     {
         const auto got = matcher.match("open music now");
-        if (!got || got->kind != ActionKind::InteractionMusicSearch) {
-            return fail("open music -> InteractionMusicSearch");
+        if (!got || got->kind != ActionKind::MusicSearchPrompt) {
+            return fail("open music -> MusicSearchPrompt");
+        }
+    }
+    {
+        const auto got = matcher.match("cancel music please");
+        if (!got || got->kind != ActionKind::MusicPlayback) {
+            return fail("cancel music -> MusicPlayback");
+        }
+    }
+    {
+        const auto got = matcher.match("stop music");
+        if (!got || got->kind != ActionKind::MusicPlayback) {
+            return fail("stop music -> MusicPlayback");
         }
     }
     {

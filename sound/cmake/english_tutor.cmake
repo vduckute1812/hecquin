@@ -28,7 +28,8 @@ target_link_libraries(english_tutor PRIVATE
     hecquin_voice_pipeline
     hecquin_learning
     hecquin_drill
-    hecquin_piper_speech)
+    hecquin_piper_speech
+    hecquin_music)
 hecquin_set_runtime_defaults(english_tutor)
 # Path-bake the pronunciation model + vocab so drill mode finds them without
 # env tweaks (mirrors pronunciation_drill.cmake).

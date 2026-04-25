@@ -9,6 +9,8 @@
 #include "learning/RetrievalService.hpp"
 #include "learning/cli/LearningApp.hpp"
 #include "learning/store/LearningStore.hpp"
+#include "music/MusicFactory.hpp"
+#include "music/MusicSession.hpp"
 #include "voice/VoiceListener.hpp"
 
 #include <iostream>
@@ -87,6 +89,13 @@ int main() {
     listener.setTutorCallback([&tutor](const Utterance& u) {
         return tutor.process(u.transcript);
     });
+
+    auto music_provider = hecquin::music::make_provider_from_config(cfg.music);
+    hecquin::music::MusicSession music_session(*music_provider, &app.voice().capture());
+    listener.setMusicCallback([&music_session](const std::string& q) {
+        return music_session.handle(q);
+    });
+
     listener.setInitialMode(ListenerMode::Lesson);
     // "exit drill" returns to Lesson (the binary's home) instead of falling
     // through to the generic Assistant / chat-completions fallback.

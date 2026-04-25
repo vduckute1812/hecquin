@@ -28,8 +28,10 @@ struct Action {
             return "LocalDevice";
         case ActionKind::InteractionTopicSearch:
             return "TopicSearch";
-        case ActionKind::InteractionMusicSearch:
-            return "MusicSearch";
+        case ActionKind::MusicSearchPrompt:
+            return "MusicSearchPrompt";
+        case ActionKind::MusicPlayback:
+            return "MusicPlayback";
         case ActionKind::ExternalApi:
             return "ExternalApi";
         case ActionKind::EnglishLesson:

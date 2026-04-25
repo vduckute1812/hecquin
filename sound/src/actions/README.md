@@ -9,12 +9,12 @@ reply plus whatever extra context the caller needs to react.
 
 | File | Purpose |
 |---|---|
-| `ActionKind.hpp` | `enum class ActionKind` — `None`, `LocalDevice`, `InteractionTopicSearch`, `InteractionMusicSearch`, `ExternalApi`, `EnglishLesson`, `LessonModeToggle`, `PronunciationFeedback`, `DrillModeToggle`. |
+| `ActionKind.hpp` | `enum class ActionKind` — `None`, `LocalDevice`, `InteractionTopicSearch`, `MusicSearchPrompt`, `MusicPlayback`, `ExternalApi`, `EnglishLesson`, `LessonModeToggle`, `PronunciationFeedback`, `DrillModeToggle`. |
 | `Action.hpp` | The canonical value type: `{ kind, reply, transcript, enable }`. `enable` is only meaningful for the two `*ModeToggle` kinds (set by `LocalIntentMatcher`). Includes `actionKindLabel(ActionKind)` for logs. |
 | `DeviceAction.hpp` | Smart-home style confirmations (`"turning the air on"`). |
 | `ExternalApiAction.hpp` | Wraps the chat-completion reply when nothing local matched. |
 | `TopicSearchAction.hpp` | Prompt to the learner to choose a story / topic. |
-| `MusicAction.hpp` | Music intent. |
+| `MusicAction.hpp` | Music intent — static factories `prompt()` / `playback(ok, title)` / `cancel()` that drive the two-turn "open music → song name → play" flow. |
 | `GrammarCorrectionAction.hpp` | The tutor's parsed "You said / Better / Reason" triple. |
 | `PronunciationFeedbackAction.hpp` | Drill score + weakest-phoneme feedback; doubles as the `DrillModeToggle` carrier. |
 | `NoneAction.hpp` | Empty-transcript guard. |

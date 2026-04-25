@@ -74,6 +74,7 @@ struct Compiled {
     std::regex device;
     std::regex story;
     std::regex music;
+    std::regex music_cancel;
     std::regex lesson_start;
     std::regex lesson_end;
     std::regex drill_start;
@@ -89,6 +90,7 @@ Compiled compile(const LocalIntentMatcherConfig& cfg) {
         make(cfg.device_pattern),
         make(cfg.story_pattern),
         make(cfg.music_pattern),
+        make(cfg.music_cancel_pattern),
         make(cfg.lesson_start_pattern),
         make(cfg.lesson_end_pattern),
         make(cfg.drill_start_pattern),
@@ -181,8 +183,15 @@ std::optional<Action> LocalIntentMatcher::match(const std::string& transcript) c
         return TopicSearchAction{}.into_action(trimmed);
     }
 
+    // Cancel must win over the "open music" pattern so phrasings like
+    // "stop music" can't accidentally be matched as a reopen by a future
+    // looser `music_pattern`.
+    if (std::regex_search(normalized, p.music_cancel)) {
+        return MusicAction::cancel(trimmed);
+    }
+
     if (std::regex_search(normalized, p.music)) {
-        return MusicAction{}.into_action(trimmed);
+        return MusicAction::prompt(trimmed);
     }
 
     return std::nullopt;
