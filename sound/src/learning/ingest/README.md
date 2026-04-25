@@ -49,3 +49,92 @@ Ingestor::run(curriculum_dir, custom_dir):
   `test_ingest_chunking_strategy.cpp`. Do not touch `Ingestor.cpp`.
 - `ProgressReporter` is CLI-only. Do **not** hook it into the logger —
   the `english_ingest` binary reads its output interactively.
+
+## UML
+
+### Class diagram — `Ingestor` facade + `IChunker` Strategy
+
+The `Ingestor` (one level up in [`../README.md`](../README.md))
+sequences the small collaborators in this folder; `IChunker` is the
+chunking Strategy with `ProseChunker` and `JsonlChunker` implementations
+selected by file extension via `make_chunker_for_extension`.
+
+```mermaid
+classDiagram
+    class Ingestor {
+        <<facade>>
+        +run() IngestReport
+    }
+    class IChunker {
+        <<interface>>
+        +chunk(content) vector_string
+    }
+    class ProseChunker
+    class JsonlChunker
+    class FileDiscovery {
+        <<free>>
+        +collect_files(...) vector_PlannedFile
+    }
+    class ContentFingerprint {
+        <<free>>
+        +content_fingerprint(bytes) string
+    }
+    class EmbeddingBatcher {
+        +embed_slice(chunks) vector_Embedding
+        +batch_size() int
+    }
+    class DocumentPersister {
+        +persist(params, idx, body, embedding)
+    }
+    class ProgressReporter {
+        +update(...)
+    }
+    class EmbeddingClient {
+        +embed(text) Embedding
+        +embed_many(texts) vector_Embedding
+    }
+    class LearningStore
+
+    IChunker <|.. ProseChunker
+    IChunker <|.. JsonlChunker
+    Ingestor o-- EmbeddingBatcher
+    Ingestor o-- DocumentPersister
+    Ingestor o-- ProgressReporter
+    Ingestor ..> FileDiscovery : collect_files
+    Ingestor ..> ContentFingerprint : skip-unchanged
+    Ingestor ..> IChunker : per-extension strategy
+    EmbeddingBatcher o-- EmbeddingClient
+    DocumentPersister o-- LearningStore
+```
+
+### Activity diagram — `english_ingest` pipeline
+
+Discover -> fingerprint -> (skip if unchanged) -> chunk -> embed in
+slices -> persist each chunk -> record file hash on success. Mermaid
+has no first-class activity syntax, so this is rendered as a flowchart.
+
+```mermaid
+flowchart TD
+    A([Start]) --> B[Load AppConfig and IngestorConfig]
+    B --> C[Open LearningStore]
+    C --> D[Build EmbeddingClient with optional Logging plus Retry]
+    D --> E[FileDiscovery collect_files]
+    E --> F{Any files?}
+    F -- No --> Z([Exit 0])
+    F -- Yes --> G[Next file]
+    G --> H[Read bytes, sanitize_utf8]
+    H --> I[content_fingerprint]
+    I --> J{Already ingested AND not force_rebuild?}
+    J -- Yes --> Q
+    J -- No --> K[make_chunker_for_extension, chunk content]
+    K --> L[Embed in slices via EmbeddingBatcher]
+    L --> M[DocumentPersister persist each chunk]
+    M --> N{Any chunks succeeded?}
+    N -- Yes --> O[record_ingested_file path and hash]
+    N -- No --> Q
+    O --> P[ProgressReporter update]
+    P --> Q{All files done?}
+    Q -- No --> G
+    Q -- Yes --> R[Return IngestReport]
+    R --> Z
+```

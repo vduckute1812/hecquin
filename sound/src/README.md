@@ -48,3 +48,39 @@ CMake internals, and the full Source Layout tree — see
 - **Chain of Responsibility** — `voice/UtteranceRouter` (local-intent → drill → tutor → chat).
 - **RAII** — microphone capture's `MuteGuard`, `WhisperEngine`'s `whisper_context`, SQLite `StmtGuard` / `Transaction`, `CachedStmt`.
 - **Optional dependencies guarded by CMake** — `HECQUIN_WITH_SQLITE`, `HECQUIN_WITH_CURL`, `HECQUIN_WITH_ONNX`. Every module degrades gracefully when its optional dependency is missing.
+
+## UML — component diagram
+
+High-level package view of the folders below `src/` and the direction of
+their dependencies. Each folder owns its own per-subsystem class /
+sequence / state diagrams in its README.
+
+```mermaid
+flowchart TD
+    cli["cli/ (text_to_speech)"]
+    voice["voice/ (VoiceListener + UtteranceRouter)"]
+    ai["ai/ (CommandProcessor + ChatClient + IHttpClient chain)"]
+    actions["actions/ (Action + ActionKind builders)"]
+    tts["tts/ (PiperSpeech + IPiperBackend + playback)"]
+    learning["learning/ (Ingestor + Tutor + Drill + Store)"]
+    config["config/ (ConfigStore, AppConfig, AiClientConfig)"]
+    obs["observability/ (Logger)"]
+    common["common/ (string + utf8 helpers)"]
+
+    cli --> tts
+    voice --> tts
+    voice --> ai
+    voice --> actions
+    voice --> config
+    ai --> actions
+    ai --> config
+    ai --> obs
+    learning --> ai
+    learning --> voice
+    learning --> tts
+    learning --> config
+    learning --> actions
+    learning --> obs
+    ai --> common
+    learning --> common
+```

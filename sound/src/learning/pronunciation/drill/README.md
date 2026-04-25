@@ -40,3 +40,136 @@ PronunciationDrillProcessor::score(pcm, transcript):
 - Do not make `DrillScoringPipeline` aware of `LearningStore`. The
   pipeline returns a `DrillScore`; persistence lives in
   `DrillProgressLogger`.
+
+## UML
+
+### Class diagram — `PronunciationDrillProcessor` facade + `DrillScoringPipeline` Template Method
+
+`DrillScoringPipeline::run` is the shared scoring skeleton (phonemize ->
+infer -> align -> score -> intonation); collaborators are pluggable for
+tests via the `set_*_for_test` hooks.
+
+```mermaid
+classDiagram
+    class PronunciationDrillProcessor {
+        <<facade>>
+        +load(...)
+        +available() bool
+        +pick_and_announce()
+        +score(pcm, transcript) Action
+    }
+    class DrillSentencePicker {
+        +next() Sentence
+    }
+    class DrillReferenceAudio {
+        +announce(text) PitchContour
+        -lru_map_
+    }
+    class DrillScoringPipeline {
+        <<TemplateMethod>>
+        +run(plan, pcm, ref_contour) Result
+    }
+    class DrillProgressLogger {
+        +log(result)
+    }
+    class PhonemeModel {
+        +load(config)
+        +infer(pcm) Emissions
+    }
+    class G2P {
+        +phonemize(text) G2PResult
+    }
+    class CtcAligner {
+        +align(emissions, targets) AlignResult
+    }
+    class PronunciationScorer {
+        +score(g2p, align) PronunciationScore
+    }
+    class PitchTracker {
+        +track(pcm) PitchContour
+    }
+    class IntonationScorer {
+        +score(reference, learner) IntonationScore
+    }
+    class ProgressTracker
+
+    PronunciationDrillProcessor o-- DrillSentencePicker
+    PronunciationDrillProcessor o-- DrillReferenceAudio
+    PronunciationDrillProcessor o-- DrillScoringPipeline
+    PronunciationDrillProcessor o-- DrillProgressLogger
+    DrillScoringPipeline o-- PhonemeModel
+    DrillScoringPipeline o-- G2P
+    DrillScoringPipeline o-- CtcAligner
+    DrillScoringPipeline o-- PronunciationScorer
+    DrillScoringPipeline o-- PitchTracker
+    DrillScoringPipeline o-- IntonationScorer
+    DrillProgressLogger o-- ProgressTracker
+    DrillReferenceAudio ..> PitchTracker : reference contour
+```
+
+### Sequence diagram — `PronunciationDrillProcessor::score`
+
+The facade delegates to `DrillScoringPipeline::run`, which executes the
+fixed Template Method skeleton (G2P, phoneme model inference, CTC
+alignment, GOP scoring, optional intonation against the cached
+reference contour), then logs progress.
+
+```mermaid
+sequenceDiagram
+    participant L as VoiceListener (Drill)
+    participant D as PronunciationDrillProcessor
+    participant Pipe as DrillScoringPipeline
+    participant G as G2P
+    participant M as PhonemeModel
+    participant A as CtcAligner
+    participant Pr as PronunciationScorer
+    participant Pt as PitchTracker
+    participant In as IntonationScorer
+    participant Log as DrillProgressLogger
+
+    L->>D: score(pcm, transcript)
+    D->>Pipe: run(plan, pcm, ref_contour)
+    Pipe->>G: phonemize(text)
+    G-->>Pipe: G2PResult
+    Pipe->>M: infer(pcm)
+    M-->>Pipe: Emissions
+    Pipe->>A: align(emissions, targets)
+    A-->>Pipe: AlignResult
+    Pipe->>Pr: score(g2p, align)
+    Pr-->>Pipe: PronunciationScore
+    opt reference contour available
+        Pipe->>Pt: track(pcm)
+        Pt-->>Pipe: learner contour
+        Pipe->>In: score(reference, learner)
+        In-->>Pipe: IntonationScore
+    end
+    Pipe-->>D: Result
+    D->>Log: log(result)
+    D-->>L: Action(PronunciationFeedback)
+```
+
+### Activity diagram — drill round
+
+Pick & announce -> capture user speech -> Whisper transcribes -> score
+-> log -> feedback -> next sentence. The `pending_drill_announce_` flag
+on `VoiceListener` triggers the next `pick_and_announce` after the TTS
+feedback finishes.
+
+```mermaid
+flowchart TD
+    A([Start round]) --> B[pick_and_announce]
+    B --> C[DrillSentencePicker next]
+    C --> D[DrillReferenceAudio announce - Piper TTS plus YIN contour]
+    D --> E[Cache contour in LRU]
+    E --> F[Play reference audio under MuteGuard]
+    F --> G[VoiceListener captures user speech]
+    G --> H[Whisper transcribes]
+    H --> I[PronunciationDrillProcessor score]
+    I --> J[DrillScoringPipeline run]
+    J --> K[DrillProgressLogger log]
+    K --> L[Return PronunciationFeedback Action]
+    L --> M[TTS speaks feedback under MuteGuard]
+    M --> N{pending_drill_announce?}
+    N -- Yes --> B
+    N -- No --> O([End round])
+```

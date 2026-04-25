@@ -45,3 +45,69 @@ Full v3 schema + column-by-column meaning is in
 - When adding a new aggregate, create a new `LearningStore<Name>.cpp`
   forwarder + `detail/<Name>Ops.hpp/.cpp` pair — keep the per-aggregate
   cut. Don't grow `LearningStore.cpp`.
+
+## UML — class diagram
+
+`LearningStore` is the public facade; per-aggregate logic lives as free
+functions in [`detail/`](./detail/README.md) and shares RAII / utility
+primitives from [`internal/`](./internal/README.md). Forwarders in
+`LearningStore<Name>.cpp` thread `(sqlite3*, StatementCache&, …)` into
+the `detail` ops so the single-connection invariant stays visible at
+every call site.
+
+```mermaid
+classDiagram
+    class LearningStore {
+        <<facade>>
+        +open(path) bool
+        +upsert_document(...)
+        +is_file_already_ingested(...)
+        +query_top_k(emb, k)
+        +record_interaction(...)
+        +touch_vocab(...)
+        +record_pronunciation_attempt(...)
+        +touch_phoneme_mastery(...)
+        +sample_drill_sentences(...)
+        +weakest_phonemes(...)
+        +record_api_call(...)
+    }
+    class DocumentsOps {
+        <<detail/free>>
+    }
+    class VectorSearchOps {
+        <<detail/free>>
+    }
+    class SessionsOps {
+        <<detail/free>>
+    }
+    class PronunciationOps {
+        <<detail/free>>
+    }
+    class ApiCallsOps {
+        <<detail/free>>
+    }
+    class StatementCache
+    class CachedStmt {
+        <<RAII>>
+    }
+    class StmtGuard {
+        <<RAII>>
+    }
+    class Transaction {
+        <<RAII>>
+    }
+    class prepare_or_log {
+        <<free>>
+    }
+
+    LearningStore o-- StatementCache
+    LearningStore ..> DocumentsOps : forwards
+    LearningStore ..> VectorSearchOps : forwards
+    LearningStore ..> SessionsOps : forwards
+    LearningStore ..> PronunciationOps : forwards
+    LearningStore ..> ApiCallsOps : forwards
+    DocumentsOps ..> StmtGuard : prepares
+    DocumentsOps ..> Transaction : batches
+    DocumentsOps ..> prepare_or_log : helper
+    StatementCache o-- CachedStmt
+```

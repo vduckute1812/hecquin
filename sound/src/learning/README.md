@@ -38,3 +38,79 @@ utilities; the heavy lifting is split across five sub-folders.
 - The SQLite store is a **single-connection** facade by design. Hold
   transactions through the store helpers, not by passing raw `sqlite3*`
   around.
+
+## UML — English tutor (RAG)
+
+### Class diagram — `EnglishTutorProcessor` + `RetrievalService`
+
+The tutor pipeline is glued together by `EnglishTutorProcessor`. The
+HTTP transport is the same `IHttpClient` chain documented in
+[`../ai/README.md`](../ai/README.md), wrapped with logging + retry by
+[`cli/EnglishTutorMain.cpp`](./cli/EnglishTutorMain.cpp). Drill and
+ingest have their own UML in their respective sub-folder READMEs; the
+[`store/`](./store/README.md) facade has its own class diagram too.
+
+```mermaid
+classDiagram
+    class EnglishTutorProcessor {
+        +process(transcript) Action
+        +process_async(transcript) future_Action
+        +ready() bool
+    }
+    class RetrievalService {
+        +top_k(query, k) vector_RetrievedDocument
+        +build_context(query, k, max_chars) string
+    }
+    class EmbeddingClient {
+        +embed(text) Embedding
+        +embed_many(texts) vector_Embedding
+    }
+    class LearningStore {
+        +query_top_k(emb, k) vector_RetrievedDocument
+    }
+    class ChatHttpClient {
+        <<IHttpClient chain>>
+    }
+    class AiClientConfig
+    class ProgressTracker
+    class GrammarCorrectionAction
+
+    EnglishTutorProcessor o-- RetrievalService
+    EnglishTutorProcessor o-- ProgressTracker
+    EnglishTutorProcessor o-- AiClientConfig
+    EnglishTutorProcessor ..> ChatHttpClient : chat completions
+    EnglishTutorProcessor ..> GrammarCorrectionAction : builds Action
+    RetrievalService o-- EmbeddingClient
+    RetrievalService o-- LearningStore
+```
+
+### Sequence diagram — `EnglishTutorProcessor::process`
+
+Tutor turn: embed the transcript, KNN against `LearningStore`, build a
+chat body that includes the retrieved snippets, call the chat HTTP
+client, parse a `GrammarCorrectionAction`, and log the interaction.
+
+```mermaid
+sequenceDiagram
+    participant L as VoiceListener (Lesson)
+    participant T as EnglishTutorProcessor
+    participant R as RetrievalService
+    participant E as EmbeddingClient
+    participant S as LearningStore
+    participant H as ChatHttpClient
+    participant P as ProgressTracker
+
+    L->>T: process(transcript)
+    T->>R: build_context(transcript, k, max_chars)
+    R->>E: embed(transcript)
+    E-->>R: embedding
+    R->>S: query_top_k(embedding, k)
+    S-->>R: RetrievedDocuments
+    R-->>T: context string
+    T->>T: build_chat_body (system + context + user)
+    T->>H: post_json(chat_completions_url, body)
+    H-->>T: assistant text
+    T->>T: parse GrammarCorrectionAction
+    T->>P: log_interaction(...)
+    T-->>L: Action(EnglishLesson)
+```

@@ -36,3 +36,130 @@ single-responsibility files.
 - The streaming player exists so long replies start playing as soon as
   the first chunk arrives. Do not "fix" it to buffer — that regresses
   perceived latency by ~600 ms on typical tutor replies.
+
+## UML
+
+### Class diagram — `IPiperBackend` Strategy + `run_pipe_synth` Template Method
+
+`PiperSpeech.hpp` exposes a flat C-style facade; the real polymorphism
+lives in [`backend/IPiperBackend.hpp`](./backend/IPiperBackend.hpp) with
+a composite `PiperFallbackBackend` wrapping pipe and shell strategies.
+`run_pipe_synth` is a free function that acts as the shared
+template-method skeleton (process spawn, stdin write, stdout read loop)
+parameterized by an `on_samples` callback.
+
+```mermaid
+classDiagram
+    class IPiperBackend {
+        <<interface>>
+        +synthesize(text, model, samples_out, sample_rate_out) bool
+    }
+    class PiperPipeBackend {
+        <<strategy>>
+        +synthesize(...) bool
+    }
+    class PiperShellBackend {
+        <<strategy>>
+        +synthesize(...) bool
+        +synthesize_to_wav(text, model, path) bool
+    }
+    class PiperFallbackBackend {
+        <<composite>>
+        -primary_ : IPiperBackend
+        -fallback_ : IPiperBackend
+        +synthesize(...) bool
+    }
+    class PiperSpeech {
+        <<facade>>
+        +piper_synthesize_wav(...)
+        +piper_synthesize_to_buffer(...)
+        +piper_speak_and_play(...)
+        +piper_speak_and_play_streaming(...)
+    }
+    class run_pipe_synth {
+        <<TemplateMethod>>
+        +run_pipe_synth(text, model, on_samples) PiperSpawnResult
+    }
+    class StreamingSdlPlayer {
+        +start(sample_rate) bool
+        +push(pcm, n)
+        +finish()
+        +wait_until_drained()
+        +stop()
+    }
+    class BufferedSdlPlayer {
+        <<free>>
+        +play_mono_22k(samples) bool
+    }
+    class WavReader {
+        <<free>>
+        +read_pcm_s16_mono(file, out) bool
+        +parse_sample_rate(file) int
+    }
+
+    IPiperBackend <|.. PiperPipeBackend
+    IPiperBackend <|.. PiperShellBackend
+    IPiperBackend <|.. PiperFallbackBackend
+    PiperFallbackBackend o-- IPiperBackend : primary
+    PiperFallbackBackend o-- IPiperBackend : fallback
+    PiperPipeBackend ..> run_pipe_synth : invokes
+    PiperShellBackend ..> WavReader : reads WAV
+    PiperSpeech ..> IPiperBackend : default backend
+    PiperSpeech ..> StreamingSdlPlayer : streaming path
+    PiperSpeech ..> BufferedSdlPlayer : buffered path
+    PiperSpeech ..> run_pipe_synth : streaming uses push callback
+```
+
+### Sequence diagram — `piper_speak_and_play_streaming`
+
+`StreamingSdlPlayer` is started, `run_pipe_synth` spawns Piper and pipes
+int16 chunks straight into the player via the `push` callback; a ~60 ms
+prebuffer gates initial playback. On a failed device start or crashed
+Piper process the call falls back to the buffered path.
+
+```mermaid
+sequenceDiagram
+    participant Caller
+    participant Piper as PiperSpeech
+    participant Player as StreamingSdlPlayer
+    participant Spawn as run_pipe_synth
+    participant SDL as SDL audio
+
+    Caller->>Piper: piper_speak_and_play_streaming(text, model)
+    Piper->>Player: start(22050)
+    alt start failed
+        Player-->>Piper: false
+        Piper->>Piper: fallback to piper_speak_and_play (buffered)
+    else started
+        Piper->>Spawn: run_pipe_synth(text, model, push_cb)
+        loop pcm chunks
+            Spawn->>Player: push(pcm, n)
+            Player->>SDL: enqueue
+            Note over Player,SDL: prebuffer ~60 ms then unpause
+        end
+        Spawn-->>Piper: PiperSpawnResult
+        Piper->>Player: finish()
+        Piper->>Player: wait_until_drained()
+        Piper->>Player: stop()
+    end
+    Piper-->>Caller: bool
+```
+
+### State diagram — `StreamingSdlPlayer`
+
+Tracks the `started_`, `eof_`, and `done_` flags around the SDL
+callback. The device stays paused until prebuffer fills or `finish()`
+forces playback; `done_` is set by the callback once EOF is reached and
+the queue drains.
+
+```mermaid
+stateDiagram-v2
+    [*] --> Idle
+    Idle --> Prebuffering : start(sample_rate)
+    Prebuffering --> Playing : queue size ge prebuffer_samples
+    Prebuffering --> Playing : finish forces unpause
+    Playing --> Draining : finish sets eof
+    Draining --> Done : callback sees EOF and empty queue
+    Done --> Idle : stop closes device
+    Done --> [*]
+```

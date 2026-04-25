@@ -42,3 +42,53 @@ The router's `Result::action` is then fed into `TtsResponsePlayer::speak(...)`.
 See also: [`../ai/README.md`](../ai/README.md) for how routing produces
 actions, and [`../voice/README.md`](../voice/README.md) for how they are
 consumed.
+
+## UML — class diagram
+
+`Action` is a single flat struct (no polymorphism, no `std::variant`);
+each `*Action` builder is a small POD that produces an `Action` via
+`into_action(...)` or a static factory. The `kind` field is the
+discriminator.
+
+```mermaid
+classDiagram
+    class Action {
+        +kind : ActionKind
+        +reply : string
+        +transcript : string
+        +enable : bool
+    }
+    class ActionKind {
+        <<enum>>
+        None
+        LocalDevice
+        InteractionTopicSearch
+        MusicSearchPrompt
+        MusicPlayback
+        ExternalApi
+        EnglishLesson
+        LessonModeToggle
+        PronunciationFeedback
+        DrillModeToggle
+    }
+    class DeviceAction
+    class MusicAction
+    class TopicSearchAction
+    class ExternalApiAction
+    class GrammarCorrectionAction
+    class LessonModeToggleAction
+    class DrillModeToggleAction
+    class PronunciationFeedbackAction
+    class NoneAction
+
+    Action --> ActionKind
+    DeviceAction ..> Action : into_action
+    MusicAction ..> Action : prompt / playback / cancel
+    TopicSearchAction ..> Action : into_action
+    ExternalApiAction ..> Action : with_reply
+    GrammarCorrectionAction ..> Action : into_action
+    LessonModeToggleAction ..> Action : into_action
+    DrillModeToggleAction ..> Action : into_action
+    PronunciationFeedbackAction ..> Action : into_action
+    NoneAction ..> Action : empty_transcript
+```
