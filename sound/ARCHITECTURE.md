@@ -3,7 +3,9 @@
 > This document is the **developer / maintainer guide** — source layout, component internals,
 > data-flow diagrams, SQLite schema, threading model, and CMake internals.
 > For **setup, CLI usage, configuration keys, and troubleshooting**, see
-> [`README.md`](./README.md).
+> [`README.md`](./README.md).  For **end-to-end call-flow sequence diagrams**
+> (boot, voice turn, TTS barge-in, music streaming + mid-song commands), see
+> [`SEQUENCE_DIAGRAMS.md`](./SEQUENCE_DIAGRAMS.md).
 
 ## Overview
 

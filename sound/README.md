@@ -5,6 +5,8 @@ A cross-platform audio processing module for the Robot Tutor project, providing 
 > This README is the **user guide** — setup, commands, configuration keys, and troubleshooting.
 > For the internal **source layout, component details, data-flow diagrams, SQLite schema,
 > threading model, and CMake internals**, see [`ARCHITECTURE.md`](./ARCHITECTURE.md).
+> For end-to-end **call-flow sequence diagrams** (boot, voice turn, TTS barge-in, music
+> streaming + mid-song commands), see [`SEQUENCE_DIAGRAMS.md`](./SEQUENCE_DIAGRAMS.md).
 
 ## Overview
 
