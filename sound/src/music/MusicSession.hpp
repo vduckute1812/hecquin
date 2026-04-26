@@ -3,41 +3,79 @@
 #include "actions/Action.hpp"
 #include "music/MusicProvider.hpp"
 
+#include <atomic>
+#include <mutex>
 #include <string>
-
-class AudioCapture;
+#include <thread>
 
 namespace hecquin::music {
 
 /**
  * Facade the voice pipeline talks to once the user has said a song name
- * in `ListenerMode::Music`.  Responsibilities:
+ * in `ListenerMode::Music`, and through which mid-song voice commands
+ * (`stop / pause / continue music`) reach the underlying provider.
  *
- *   - Trim the query, bail out fast on empty input.
- *   - Ask the injected `MusicProvider` to resolve the top track.
- *   - Mute the microphone (via `AudioCapture::MuteGuard`) while the
- *     provider is streaming audio, so the speaker output does not get
- *     recaptured and re-transcribed as noise.
- *   - Return a `MusicPlayback` `Action` that the listener plays as TTS
- *     after playback ends and the mic comes back up.
+ * Lifecycle of one song:
  *
- * `capture` may be null in tests — in that case we skip muting and just
- * exercise the provider contract.
+ *   1. `handle(query)` searches synchronously (cheap; one yt-dlp call)
+ *      and, on a hit, dispatches `provider_.play(track)` to a private
+ *      background thread.  The method returns a "Now playing …"
+ *      `Action` immediately so the listener's poll loop is freed up
+ *      and can keep capturing voice while audio streams.
+ *   2. While the song streams, `abort()` / `pause()` / `resume()` may
+ *      be invoked from the listener thread to control playback.
+ *   3. When `play()` returns (drained or aborted) the background
+ *      thread exits; the next `handle()` / `abort()` / `~MusicSession`
+ *      call joins it.
+ *
+ * The microphone is no longer paused around `play()` — that's why
+ * `capture` is dropped from the dependency list.  The voice pipeline's
+ * primary VAD picks up "stop music" through speaker bleed; the small
+ * intent regex set means stray transcription of song lyrics rarely
+ * matches anything.  Tests inject a fake provider and never see the
+ * mic.
  */
 class MusicSession {
 public:
-    MusicSession(MusicProvider& provider, AudioCapture* capture)
-        : provider_(provider), capture_(capture) {}
+    explicit MusicSession(MusicProvider& provider) : provider_(provider) {}
+    ~MusicSession();
 
-    /** Handle one user-provided song query; returns an `Action`. */
+    MusicSession(const MusicSession&)            = delete;
+    MusicSession& operator=(const MusicSession&) = delete;
+
+    /**
+     * Handle one user-provided song query.  Returns the `Action` the
+     * listener should announce immediately:
+     *   - empty / unparsable query → `MusicPlayback(ok=false)`.
+     *   - search miss              → `MusicPlayback(ok=false)`.
+     *   - search hit               → `MusicPlayback(ok=true, title)`,
+     *                                playback running on a background
+     *                                thread.
+     */
     Action handle(const std::string& query);
 
-    /** Forward a stop request to the underlying provider (SIGINT path). */
+    /** Stop any in-flight playback and join the worker thread.  Safe to
+     *  call when nothing is playing.  Idempotent. */
     void abort();
 
+    /** Best-effort: forward to `provider_.pause()`.  No-op when no song
+     *  is currently playing. */
+    void pause();
+
+    /** Best-effort counterpart to `pause()`. */
+    void resume();
+
+    /** True between `handle()` returning a successful playback action
+     *  and the background thread observing `provider_.play()` return. */
+    bool is_playing() const { return playing_.load(); }
+
 private:
-    MusicProvider& provider_;
-    AudioCapture*  capture_;
+    void abort_locked_();
+
+    MusicProvider&    provider_;
+    std::mutex        thread_mu_;
+    std::thread       playback_thread_;
+    std::atomic<bool> playing_{false};
 };
 
 } // namespace hecquin::music

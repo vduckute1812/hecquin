@@ -1,10 +1,9 @@
 #include "voice/TtsResponsePlayer.hpp"
 
+#include "common/StringUtils.hpp"
 #include "tts/PiperSpeech.hpp"
 #include "voice/AudioCapture.hpp"
 
-#include <algorithm>
-#include <cctype>
 #include <iostream>
 #include <regex>
 #include <utility>
@@ -59,11 +58,7 @@ std::string TtsResponsePlayer::sanitize(std::string s) {
     s = std::regex_replace(s, rx_inline_code(), "$1");
     s = std::regex_replace(s, rx_whitespace_run(), " ");
     s = std::regex_replace(s, rx_double_space(), " ");
-
-    auto not_space = [](unsigned char c) { return !std::isspace(c); };
-    s.erase(s.begin(), std::find_if(s.begin(), s.end(), not_space));
-    s.erase(std::find_if(s.rbegin(), s.rend(), not_space).base(), s.end());
-    return s;
+    return hecquin::common::trim_copy(std::move(s));
 }
 
 void TtsResponsePlayer::speak(const Action& action, const char* mode_label) {

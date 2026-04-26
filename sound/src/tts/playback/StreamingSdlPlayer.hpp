@@ -1,13 +1,10 @@
 #pragma once
 
-#include <SDL.h>
+#include "tts/playback/PcmRingQueue.hpp"
+#include "tts/playback/SdlMonoDevice.hpp"
 
-#include <atomic>
-#include <condition_variable>
 #include <cstddef>
 #include <cstdint>
-#include <deque>
-#include <mutex>
 
 namespace hecquin::tts::playback {
 
@@ -27,10 +24,19 @@ namespace hecquin::tts::playback {
  * hits a ~60 ms prebuffer threshold (so very short utterances still
  * play even if they never reach the threshold — `finish()` force-starts
  * the device in that case).
+ *
+ * Internally this is a thin facade over `PcmRingQueue` (cv-backed
+ * queue + drain signalling) and `SdlMonoDevice` (RAII handle around
+ * `SDL_OpenAudioDevice`).  Both are exposed in their own headers so
+ * tests can exercise the queue without bringing up SDL.
  */
 class StreamingSdlPlayer {
 public:
+    StreamingSdlPlayer() = default;
     ~StreamingSdlPlayer();
+
+    StreamingSdlPlayer(const StreamingSdlPlayer&) = delete;
+    StreamingSdlPlayer& operator=(const StreamingSdlPlayer&) = delete;
 
     /** Open the device at `sample_rate` Hz.  Returns false on failure. */
     bool start(int sample_rate);
@@ -45,21 +51,26 @@ public:
     /** Block until the SDL callback has drained every queued sample. */
     void wait_until_drained();
 
+    /**
+     * Suspend / resume the SDL audio callback without releasing the
+     * device.  Idempotent.  Used by the music path so "pause music" /
+     * "continue music" voice intents can flip the stream without
+     * tearing down `yt-dlp` + `ffmpeg`.  Returns false when the device
+     * is not open (start() has not been called yet, or stop() already
+     * ran) so callers can detect a no-op.
+     */
+    bool set_paused(bool paused);
+
     /** Close the device and release resources. */
     void stop();
 
 private:
-    friend void streaming_callback(void*, Uint8*, int);
+    static void sdl_callback_(void* userdata, std::uint8_t* stream, int len);
 
-    SDL_AudioDeviceID dev_ = 0;
-    bool started_ = false;
-    std::size_t prebuffer_samples_ = 0;
-
-    std::mutex mu_;
-    std::deque<std::int16_t> queue_;
-    bool eof_ = false;
-    std::atomic<bool> done_{false};
-    std::condition_variable not_empty_;
+    SdlMonoDevice device_;
+    PcmRingQueue  queue_;
+    bool          started_ = false;
+    std::size_t   prebuffer_samples_ = 0;
 };
 
 } // namespace hecquin::tts::playback

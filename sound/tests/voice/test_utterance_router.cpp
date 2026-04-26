@@ -237,8 +237,37 @@ int main() {
                "cancel music goes through local intent");
         expect(music_calls == 0,
                "local intent short-circuits in Music mode");
-        expect(r.action.kind == ActionKind::MusicPlayback,
-               "cancel music yields MusicPlayback (cancelled) action");
+        expect(r.action.kind == ActionKind::MusicCancel,
+               "cancel music yields MusicCancel action");
+    }
+
+    // ------------------------------------------------------------------
+    // 8. "pause music" / "continue music" also short-circuit to local
+    //    intent so they take effect mid-song without going through the
+    //    music callback (which would treat them as new song queries).
+    // ------------------------------------------------------------------
+    {
+        ListenerMode mode = ListenerMode::Music;
+        int music_calls = 0;
+        UtteranceRouter router(
+            commands, mode,
+            /*drill_cb=*/nullptr,
+            /*tutor_cb=*/nullptr,
+            /*music_cb=*/[&](const std::string&) {
+                ++music_calls;
+                return Action{};
+            });
+
+        auto r = router.route(make_utt("pause music"));
+        expect(r.from_local_intent && r.action.kind == ActionKind::MusicPause,
+               "pause music yields MusicPause via local intent");
+
+        r = router.route(make_utt("continue music"));
+        expect(r.from_local_intent && r.action.kind == ActionKind::MusicResume,
+               "continue music yields MusicResume via local intent");
+
+        expect(music_calls == 0,
+               "pause / resume never reach the music callback");
     }
 
     if (failures == 0) {

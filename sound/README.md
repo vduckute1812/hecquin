@@ -185,8 +185,10 @@ The voice detector listens on the default microphone, detects speech activity, t
 | `turn on` / `turn off` + `air` or `switch` | `LocalDevice`            | Short confirmation (e.g. turning air on/off)                      |
 | `tell me a story`                          | `InteractionTopicSearch` | Prompt to choose a story / topic                                  |
 | `open music`                               | `MusicSearchPrompt`      | "What music would you like to play?" — enters `ListenerMode::Music` |
-| *(next utterance in `Music` mode)*         | `MusicPlayback`          | "Now playing …" (or an error) after yt-dlp + ffmpeg stream finishes |
-| `cancel` / `stop` / `exit music`           | `MusicPlayback`          | Cancels the pending music search and exits `Music` mode           |
+| *(next utterance in `Music` mode)*         | `MusicPlayback` / `MusicNotFound` | "Now playing …" on a hit (playback runs on a background thread so the mic stays live), "Sorry, I couldn't find that song." on a miss |
+| `stop / cancel / exit / close / end music` | `MusicCancel`            | Aborts in-flight playback (or the pending search); exits `Music` mode |
+| `pause music`                              | `MusicPause`             | Best-effort suspend (provider-dependent — works for the default SDL pipeline) |
+| `continue / resume / unpause music`        | `MusicResume`            | Counterpart to pause                                              |
 | *(no match)*                               | `ExternalApi`            | Assistant text from the HTTP API (or an error / disabled message) |
 
 

@@ -1,5 +1,6 @@
 #include "ai/LocalIntentMatcher.hpp"
 
+#include "config/AppConfig.hpp"
 #include "actions/DeviceAction.hpp"
 #include "actions/GrammarCorrectionAction.hpp"
 #include "actions/MusicAction.hpp"
@@ -75,6 +76,8 @@ struct Compiled {
     std::regex story;
     std::regex music;
     std::regex music_cancel;
+    std::regex music_pause;
+    std::regex music_resume;
     std::regex lesson_start;
     std::regex lesson_end;
     std::regex drill_start;
@@ -91,6 +94,8 @@ Compiled compile(const LocalIntentMatcherConfig& cfg) {
         make(cfg.story_pattern),
         make(cfg.music_pattern),
         make(cfg.music_cancel_pattern),
+        make(cfg.music_pause_pattern),
+        make(cfg.music_resume_pattern),
         make(cfg.lesson_start_pattern),
         make(cfg.lesson_end_pattern),
         make(cfg.drill_start_pattern),
@@ -128,6 +133,14 @@ LocalIntentMatcherConfig LocalIntentMatcherConfig::from_phrase_lists(
     out.drill_end_pattern =
         alternation_from_list(drill_end, out.drill_end_pattern);
     return out;
+}
+
+LocalIntentMatcherConfig
+LocalIntentMatcherConfig::make_from_learning(const LearningConfig& cfg) {
+    return from_phrase_lists(cfg.lesson_start_phrases,
+                             cfg.lesson_end_phrases,
+                             cfg.drill_start_phrases,
+                             cfg.drill_end_phrases);
 }
 
 LocalIntentMatcher::LocalIntentMatcher(LocalIntentMatcherConfig cfg)
@@ -183,11 +196,19 @@ std::optional<Action> LocalIntentMatcher::match(const std::string& transcript) c
         return TopicSearchAction{}.into_action(trimmed);
     }
 
-    // Cancel must win over the "open music" pattern so phrasings like
-    // "stop music" can't accidentally be matched as a reopen by a future
-    // looser `music_pattern`.
+    // Cancel / pause / resume must win over the "open music" pattern so
+    // phrasings like "stop music" can't accidentally be matched as a
+    // reopen by a future looser `music_pattern`.  Pause / resume are
+    // also placed ahead of `music` (not just `music_cancel`) for the
+    // same reason.
     if (std::regex_search(normalized, p.music_cancel)) {
         return MusicAction::cancel(trimmed);
+    }
+    if (std::regex_search(normalized, p.music_pause)) {
+        return MusicAction::pause(trimmed);
+    }
+    if (std::regex_search(normalized, p.music_resume)) {
+        return MusicAction::resume(trimmed);
     }
 
     if (std::regex_search(normalized, p.music)) {

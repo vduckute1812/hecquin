@@ -10,7 +10,8 @@ single-responsibility files.
 
 | File | Purpose |
 |---|---|
-| `PiperSpeech.hpp/cpp` | Public facade. Composes a default `IPiperBackend` (pipe → shell fallback) with a `BufferedSdlPlayer` / `StreamingSdlPlayer` depending on the call. Keeps the legacy free-function API. |
+| `PiperSpeech.hpp/cpp` | Public facade. Holds the default `IPiperBackend` (pipe → shell fallback) and forwards the speak-and-play entry points to `PlayPipeline`. Keeps the legacy free-function API. |
+| `PlayPipeline.hpp/cpp` | Implementation of `piper_speak_and_play` and `piper_speak_and_play_streaming` — buffered vs streaming SDL playback orchestrated against the `IPiperBackend`. Extracted out of `PiperSpeech.cpp` so the facade stays a true facade. |
 
 ## Sub-folders
 
@@ -27,7 +28,8 @@ single-responsibility files.
 
 ## Tests
 
-- `tests/test_piper_backend_fallback.cpp` — Strategy composition with stubbed backends.
+- `tests/tts/test_piper_backend_fallback.cpp` — Strategy composition with stubbed backends.
+- `tests/tts/test_pcm_ring_queue.cpp` — `std::condition_variable`-backed drain signalling, EOF behaviour, multi-producer safety.
 
 ## Notes
 

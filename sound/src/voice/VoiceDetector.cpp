@@ -1,25 +1,11 @@
 #include "ai/CommandProcessor.hpp"
-#include "music/MusicFactory.hpp"
-#include "music/MusicSession.hpp"
+#include "ai/LocalIntentMatcher.hpp"
+#include "cli/DefaultPaths.hpp"
+#include "voice/MusicWiring.hpp"
 #include "voice/VoiceApp.hpp"
 #include "voice/VoiceListener.hpp"
 
 #include <iostream>
-
-// Compile-time defaults injected by CMake (see hecquin_set_runtime_defaults);
-// the fallbacks below keep the file compilable outside the project build.
-#ifndef DEFAULT_MODEL_PATH
-#define DEFAULT_MODEL_PATH ".env/models/ggml-base.bin"
-#endif
-#ifndef DEFAULT_PIPER_MODEL_PATH
-#define DEFAULT_PIPER_MODEL_PATH ".env/shared/models/piper/en_US-lessac-medium.onnx"
-#endif
-#ifndef DEFAULT_CONFIG_PATH
-#define DEFAULT_CONFIG_PATH ConfigStore::kDefaultPath
-#endif
-#ifndef DEFAULT_PROMPTS_DIR
-#define DEFAULT_PROMPTS_DIR ""
-#endif
 
 int main() {
     hecquin::voice::VoiceApp app({
@@ -30,26 +16,16 @@ int main() {
     });
     if (!app.init()) return 1;
 
-    const auto& learn_cfg = app.config().learning;
-    auto matcher_cfg = hecquin::ai::LocalIntentMatcherConfig::from_phrase_lists(
-        learn_cfg.lesson_start_phrases,
-        learn_cfg.lesson_end_phrases,
-        learn_cfg.drill_start_phrases,
-        learn_cfg.drill_end_phrases);
+    auto matcher_cfg = hecquin::ai::LocalIntentMatcherConfig::make_from_learning(
+        app.config().learning);
     CommandProcessor commands(std::move(app.config().ai), std::move(matcher_cfg));
+
     VoiceListenerConfig vcfg;
     vcfg.apply_env_overrides();
     VoiceListener listener(app.whisper(), app.capture(), commands,
                            app.running(), app.piper_model_path(), vcfg);
 
-    // Music provider + session — shells out to yt-dlp/ffmpeg.  Using a
-    // factory keeps the choice of back-end (YouTube today, Apple Music
-    // later) config-driven rather than hardcoded at the call site.
-    auto music_provider = hecquin::music::make_provider_from_config(app.config().music);
-    hecquin::music::MusicSession music_session(*music_provider, &app.capture());
-    listener.setMusicCallback([&music_session](const std::string& q) {
-        return music_session.handle(q);
-    });
+    auto music = hecquin::voice::install_music_wiring(listener, app.config().music);
 
     listener.run();
 

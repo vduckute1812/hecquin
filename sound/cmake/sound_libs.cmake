@@ -19,6 +19,9 @@ if (NOT DEFINED HECQUIN_SOUND_SRC_ROOT)
     set(HECQUIN_SOUND_SRC_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/src")
 endif ()
 
+# `hecquin_common` is declared in `cmake/sound_common.cmake` and loaded
+# *before* `piper_speech.cmake` so the Piper shell backend can link it.
+
 # ---- hecquin_config ----------------------------------------------------------
 if (NOT TARGET hecquin_config)
     add_library(hecquin_config STATIC
@@ -69,7 +72,11 @@ endif ()
 set(HECQUIN_MUSIC_SOURCES
     ${HECQUIN_SOUND_SRC_ROOT}/music/MusicSession.cpp
     ${HECQUIN_SOUND_SRC_ROOT}/music/MusicFactory.cpp
-    ${HECQUIN_SOUND_SRC_ROOT}/music/YouTubeMusicProvider.cpp)
+    ${HECQUIN_SOUND_SRC_ROOT}/music/YouTubeMusicProvider.cpp
+    ${HECQUIN_SOUND_SRC_ROOT}/music/yt/YtDlpCommands.cpp
+    ${HECQUIN_SOUND_SRC_ROOT}/music/yt/YtDlpSearch.cpp
+    ${HECQUIN_SOUND_SRC_ROOT}/music/yt/YtPlaybackPipeline.cpp
+    ${HECQUIN_SOUND_SRC_ROOT}/voice/MusicWiring.cpp)
 
 # ---- hecquin_voice_pipeline --------------------------------------------------
 # Microphone capture → whisper.cpp → VoiceListener → CommandProcessor.
@@ -77,10 +84,15 @@ if (NOT TARGET hecquin_voice_pipeline)
     add_library(hecquin_voice_pipeline STATIC
         ${HECQUIN_SOUND_SRC_ROOT}/voice/AudioCapture.cpp
         ${HECQUIN_SOUND_SRC_ROOT}/voice/WhisperEngine.cpp
+        ${HECQUIN_SOUND_SRC_ROOT}/voice/WhisperPostFilter.cpp
         ${HECQUIN_SOUND_SRC_ROOT}/voice/VoiceListener.cpp
         ${HECQUIN_SOUND_SRC_ROOT}/voice/VoiceApp.cpp
         ${HECQUIN_SOUND_SRC_ROOT}/voice/SecondaryVadGate.cpp
+        ${HECQUIN_SOUND_SRC_ROOT}/voice/NoiseFloorTracker.cpp
         ${HECQUIN_SOUND_SRC_ROOT}/voice/UtteranceCollector.cpp
+        ${HECQUIN_SOUND_SRC_ROOT}/voice/MusicSideEffects.cpp
+        ${HECQUIN_SOUND_SRC_ROOT}/voice/ActionSideEffectRegistry.cpp
+        ${HECQUIN_SOUND_SRC_ROOT}/voice/PipelineTelemetry.cpp
         ${HECQUIN_SOUND_SRC_ROOT}/voice/TtsResponsePlayer.cpp
         ${HECQUIN_SOUND_SRC_ROOT}/voice/UtteranceRouter.cpp
         ${HECQUIN_SOUND_SRC_ROOT}/ai/CommandProcessor.cpp
@@ -103,6 +115,7 @@ if (NOT TARGET hecquin_music)
     # at final-link time; PUBLIC piper_speech so StreamingSdlPlayer does
     # the same for the SDL playback pipeline.
     target_link_libraries(hecquin_music PUBLIC
+        hecquin_common
         hecquin_config
         hecquin_voice_pipeline
         hecquin_piper_speech)
@@ -135,6 +148,9 @@ if (HECQUIN_HAS_SQLITE AND NOT TARGET hecquin_learning)
         ${HECQUIN_SOUND_SRC_ROOT}/learning/RetrievalService.cpp
         ${HECQUIN_SOUND_SRC_ROOT}/learning/ProgressTracker.cpp
         ${HECQUIN_SOUND_SRC_ROOT}/learning/EnglishTutorProcessor.cpp
+        ${HECQUIN_SOUND_SRC_ROOT}/learning/tutor/TutorContextBuilder.cpp
+        ${HECQUIN_SOUND_SRC_ROOT}/learning/tutor/TutorChatRequest.cpp
+        ${HECQUIN_SOUND_SRC_ROOT}/learning/tutor/TutorReplyParser.cpp
     )
     target_include_directories(hecquin_learning PUBLIC ${HECQUIN_SOUND_SRC_ROOT})
     target_link_libraries(hecquin_learning PUBLIC

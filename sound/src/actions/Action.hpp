@@ -32,6 +32,14 @@ struct Action {
             return "MusicSearchPrompt";
         case ActionKind::MusicPlayback:
             return "MusicPlayback";
+        case ActionKind::MusicNotFound:
+            return "MusicNotFound";
+        case ActionKind::MusicCancel:
+            return "MusicCancel";
+        case ActionKind::MusicPause:
+            return "MusicPause";
+        case ActionKind::MusicResume:
+            return "MusicResume";
         case ActionKind::ExternalApi:
             return "ExternalApi";
         case ActionKind::EnglishLesson:

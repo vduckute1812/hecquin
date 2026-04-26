@@ -5,6 +5,8 @@
 #include <optional>
 #include <string>
 
+struct LearningConfig;
+
 namespace hecquin::ai {
 
 /**
@@ -23,12 +25,27 @@ struct LocalIntentMatcherConfig {
     std::string story_pattern = R"(\btell me a story\b)";
     std::string music_pattern = R"(\bopen music\b)";
     /**
-     * "cancel music" / "stop music" / "exit music" — lets the user back out
-     * of `ListenerMode::Music` without giving a song name.  Kept distinct
-     * from the lesson / drill exits so phrasings don't leak across modes.
+     * "cancel music" / "stop music" / "exit music" — both the pre-play
+     * bail-out (before the user has supplied a song name) and the
+     * mid-song abort path.  Kept distinct from the lesson / drill exits
+     * so phrasings don't leak across modes.
      */
     std::string music_cancel_pattern =
-        R"(\b(cancel|stop|exit|close)\s+music\b)";
+        R"(\b(cancel|stop|exit|close|end)\s+music\b)";
+    /**
+     * "pause music" — best-effort suspend of the current song.  The
+     * provider may or may not honour it (SDL devices can; some
+     * external streamers can't).
+     */
+    std::string music_pause_pattern = R"(\bpause\s+music\b)";
+    /**
+     * "continue music" / "resume music" / "play music" (the latter is
+     * intentionally narrow: only matches when there is no other word
+     * after `music`, so "play despacito" still goes through as a
+     * regular query in `Music` mode).
+     */
+    std::string music_resume_pattern =
+        R"(\b(continue|resume|unpause)\s+music\b)";
     std::string lesson_start_pattern =
         R"(\b(start|begin|open)\s+(english\s+)?lesson\b)";
     std::string lesson_end_pattern =
@@ -49,6 +66,14 @@ struct LocalIntentMatcherConfig {
         const std::string& lesson_end,
         const std::string& drill_start,
         const std::string& drill_end);
+
+    /**
+     * Convenience: pull the four phrase lists straight off
+     * `AppConfig::LearningConfig`.  Single source of truth so the
+     * standalone `voice_detector` and the `LearningApp::matcher_config()`
+     * helper do not drift apart.
+     */
+    static LocalIntentMatcherConfig make_from_learning(const LearningConfig& cfg);
 };
 
 /**

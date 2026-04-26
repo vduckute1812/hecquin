@@ -8,6 +8,7 @@ set(HECQUIN_SOUND_SRC_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/src")
 
 add_library(hecquin_piper_speech STATIC
     ${HECQUIN_SOUND_SRC_ROOT}/tts/PiperSpeech.cpp
+    ${HECQUIN_SOUND_SRC_ROOT}/tts/PlayPipeline.cpp
     ${HECQUIN_SOUND_SRC_ROOT}/tts/runtime/PiperRuntime.cpp
     ${HECQUIN_SOUND_SRC_ROOT}/tts/wav/WavReader.cpp
     ${HECQUIN_SOUND_SRC_ROOT}/tts/backend/PiperSpawn.cpp
@@ -15,8 +16,13 @@ add_library(hecquin_piper_speech STATIC
     ${HECQUIN_SOUND_SRC_ROOT}/tts/backend/PiperShellBackend.cpp
     ${HECQUIN_SOUND_SRC_ROOT}/tts/backend/PiperFallbackBackend.cpp
     ${HECQUIN_SOUND_SRC_ROOT}/tts/playback/SdlAudioDevice.cpp
+    ${HECQUIN_SOUND_SRC_ROOT}/tts/playback/SdlMonoDevice.cpp
+    ${HECQUIN_SOUND_SRC_ROOT}/tts/playback/PcmRingQueue.cpp
     ${HECQUIN_SOUND_SRC_ROOT}/tts/playback/BufferedSdlPlayer.cpp
     ${HECQUIN_SOUND_SRC_ROOT}/tts/playback/StreamingSdlPlayer.cpp
 )
-target_link_libraries(hecquin_piper_speech PUBLIC hecquin_deps_sdl2 hecquin_deps_piper)
+target_link_libraries(hecquin_piper_speech PUBLIC
+    hecquin_common
+    hecquin_deps_sdl2
+    hecquin_deps_piper)
 target_include_directories(hecquin_piper_speech PUBLIC ${HECQUIN_SOUND_SRC_ROOT})

@@ -1,5 +1,6 @@
 #include "tts/backend/PiperShellBackend.hpp"
 
+#include "common/ShellEscape.hpp"
 #include "tts/runtime/PiperRuntime.hpp"
 #include "tts/wav/WavReader.hpp"
 
@@ -20,18 +21,7 @@ namespace {
 constexpr int kPiperSampleRate = 22050;
 constexpr const char* kTempWavFilename = "piper_output.wav";
 
-std::string shell_quote(const std::string& value) {
-    std::string quoted = "'";
-    for (char c : value) {
-        if (c == '\'') {
-            quoted += "'\\''";
-        } else {
-            quoted += c;
-        }
-    }
-    quoted += "'";
-    return quoted;
-}
+using hecquin::common::posix_sh_single_quote;
 
 std::string piper_temp_wav_path() {
     try {
@@ -55,8 +45,10 @@ bool PiperShellBackend::synthesize_to_wav(const std::string& text,
     runtime::configure();
 
     const std::string command =
-        "echo " + shell_quote(text) + " | " + shell_quote(PIPER_EXECUTABLE) + " --model " +
-        shell_quote(model_path) + " --output_file " + shell_quote(output_wav_path);
+        "echo " + posix_sh_single_quote(text) + " | " +
+        posix_sh_single_quote(PIPER_EXECUTABLE) + " --model " +
+        posix_sh_single_quote(model_path) + " --output_file " +
+        posix_sh_single_quote(output_wav_path);
 
     std::cout << "🔊 Synthesizing speech..." << std::endl;
 

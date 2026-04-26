@@ -2,6 +2,8 @@
 
 namespace hecquin::voice {
 
+struct CollectedUtterance;
+
 /**
  * Verdict from the secondary VAD gate that runs after the end-silence
  * timer fires.  `accept` is true iff the utterance should be handed to
@@ -29,5 +31,22 @@ VadGateDecision evaluate_secondary_gate(int voiced_frames,
                                         float mean_rms,
                                         float min_utterance_rms,
                                         float min_voiced_frame_ratio);
+
+/**
+ * Convenience overload that derives the gate inputs (`effective_frames`
+ * and the utterance mean RMS) directly from a `CollectedUtterance`.
+ *
+ * The arithmetic used to live inline at the top of
+ * `VoiceListener::run`'s loop body; moving it here keeps the
+ * orchestrator focused on flow control and gives anyone replacing the
+ * gate a single call site to redirect.
+ *
+ * Defined in [`SecondaryVadGate.cpp`](SecondaryVadGate.cpp); links the
+ * collector header for the struct definition.
+ */
+VadGateDecision evaluate_for_utterance(const CollectedUtterance& utt,
+                                       int poll_interval_ms,
+                                       float min_utterance_rms,
+                                       float min_voiced_frame_ratio);
 
 } // namespace hecquin::voice

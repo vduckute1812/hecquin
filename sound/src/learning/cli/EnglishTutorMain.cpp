@@ -2,6 +2,7 @@
 #include "ai/IHttpClient.hpp"
 #include "ai/LoggingHttpClient.hpp"
 #include "ai/RetryingHttpClient.hpp"
+#include "cli/DefaultPaths.hpp"
 #include "learning/EmbeddingClient.hpp"
 #include "learning/EnglishTutorProcessor.hpp"
 #include "learning/ProgressTracker.hpp"
@@ -9,30 +10,10 @@
 #include "learning/RetrievalService.hpp"
 #include "learning/cli/LearningApp.hpp"
 #include "learning/store/LearningStore.hpp"
-#include "music/MusicFactory.hpp"
-#include "music/MusicSession.hpp"
+#include "voice/MusicWiring.hpp"
 #include "voice/VoiceListener.hpp"
 
 #include <iostream>
-
-#ifndef DEFAULT_MODEL_PATH
-#define DEFAULT_MODEL_PATH ".env/shared/models/ggml-base.bin"
-#endif
-#ifndef DEFAULT_PIPER_MODEL_PATH
-#define DEFAULT_PIPER_MODEL_PATH ".env/shared/models/piper/en_US-lessac-medium.onnx"
-#endif
-#ifndef DEFAULT_CONFIG_PATH
-#define DEFAULT_CONFIG_PATH ConfigStore::kDefaultPath
-#endif
-#ifndef DEFAULT_PROMPTS_DIR
-#define DEFAULT_PROMPTS_DIR ""
-#endif
-#ifndef DEFAULT_PRONUNCIATION_MODEL_PATH
-#define DEFAULT_PRONUNCIATION_MODEL_PATH ""
-#endif
-#ifndef DEFAULT_PRONUNCIATION_VOCAB_PATH
-#define DEFAULT_PRONUNCIATION_VOCAB_PATH ""
-#endif
 
 int main() {
     hecquin::learning::cli::LearningApp app({
@@ -90,11 +71,7 @@ int main() {
         return tutor.process(u.transcript);
     });
 
-    auto music_provider = hecquin::music::make_provider_from_config(cfg.music);
-    hecquin::music::MusicSession music_session(*music_provider, &app.voice().capture());
-    listener.setMusicCallback([&music_session](const std::string& q) {
-        return music_session.handle(q);
-    });
+    auto music = hecquin::voice::install_music_wiring(listener, cfg.music);
 
     listener.setInitialMode(ListenerMode::Lesson);
     // "exit drill" returns to Lesson (the binary's home) instead of falling

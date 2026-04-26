@@ -41,7 +41,9 @@ CommandProcessor
     │       "turn on/off" + device        → DeviceAction
     │       "tell me a story"             → TopicSearchAction
     │       "open music"                  → MusicAction::prompt  (enters Music mode)
-    │       "cancel/stop/exit music"      → MusicAction::cancel  (leaves Music mode)
+    │       "stop/cancel/exit/close/end music" → MusicAction::cancel  (aborts playback, leaves Music mode)
+    │       "pause music"                 → MusicAction::pause   (best-effort suspend)
+    │       "continue/resume music"       → MusicAction::resume  (counterpart of pause)
     │       "start english lesson" / "exit lesson" → LessonModeToggle
     │       "start pronunciation drill" / "exit drill" → DrillModeToggle
     │
@@ -66,7 +68,12 @@ src/
 │   ├── AudioCapture.hpp/cpp      — SDL2 microphone capture (+ `MuteGuard` RAII, `snapshotRecent` tail copy)
 │   ├── AudioCaptureConfig.hpp    — POD config (no SDL include)
 │   ├── WhisperEngine.hpp/cpp     — whisper.cpp wrapper + env-driven `WhisperConfig` (language / threads / beam)
+│   ├── WhisperPostFilter.hpp/cpp — pure transcript gates (annotation strip, min-alnum, no-speech) — extracted from `WhisperEngine`
+│   ├── ListenerMode.hpp          — `ListenerMode { Assistant, Lesson, Drill, Music }` enum (own header to break cycles)
 │   ├── VoiceListener.hpp/cpp     — thin coordinator: poll loop + mode state machine
+│   ├── ActionSideEffectRegistry.hpp/cpp — data-driven `ActionKind → {ModeChange, music_hook}` table; replaces the old switch in `VoiceListener::apply_local_intent_side_effects_`
+│   ├── MusicSideEffects.hpp/cpp  — listener-side music-mode toggles + speaker-bleed gate
+│   ├── MusicWiring.hpp/cpp       — `install_music_wiring(listener, MusicConfig)` builds `MusicProvider` + `MusicSession` + 4 callbacks; replaces the copy that used to live in every voice main
 │   ├── UtteranceCollector.hpp/cpp— primary VAD, collection timers, full-buffer snapshot on close
 │   ├── SecondaryVadGate.hpp/cpp  — pure `evaluate_secondary_gate(...)` (mean-RMS + voiced-ratio)
 │   ├── TtsResponsePlayer.hpp/cpp — TTS sanitise + `MuteGuard` wrap + Piper playback
@@ -85,8 +92,23 @@ src/
 │   └── OpenAiChatContent.hpp/cpp — nlohmann/json response extractor
 ├── observability/
 │   └── Log.hpp                   — tiny structured logger (pretty / JSON via `HECQUIN_LOG_FORMAT`, level via `HECQUIN_LOG_LEVEL`)
-├── common/
-│   └── StringUtils.hpp           — header-only trim/lower/starts_with
+├── common/                      — cross-cutting C++ utilities used by ai / music / tts / voice
+│   ├── StringUtils.hpp          — header-only trim / lower / starts_with
+│   ├── EnvParse.hpp             — header-only `read_string / parse_int / parse_float / parse_size` for `HECQUIN_*` env vars
+│   ├── ShellEscape.hpp          — header-only `posix_sh_single_quote(...)` (single source of truth for sh escaping)
+│   ├── Subprocess.hpp/cpp       — RAII wrapper around `fork`/`exec` + stdout pipe (`spawn_read`, `kill_and_reap`)
+│   └── Utf8.hpp/cpp             — `sanitize_utf8` (drops CP-1252 0xA0, replaces overlong sequences)
+├── cli/                          — bits shared across executable entry points
+│   └── DefaultPaths.hpp          — single source of truth for `DEFAULT_MODEL_PATH` / `DEFAULT_PIPER_MODEL_PATH` / `DEFAULT_CONFIG_PATH` / `DEFAULT_PROMPTS_DIR` / `DEFAULT_PRONUNCIATION_*` (CMake fallbacks for compiles outside the project build)
+├── music/                        — pluggable music subsystem (yt-dlp + ffmpeg today)
+│   ├── MusicProvider.hpp         — `MusicProvider` abstract interface (search / play / stop / pause / resume)
+│   ├── MusicFactory.hpp/cpp      — `make_provider_from_config(MusicConfig)` selects the back-end
+│   ├── MusicSession.hpp/cpp      — orchestrates one search → play → cancel session on a worker thread
+│   ├── YouTubeMusicProvider.hpp/cpp — thin orchestrator: wires `yt/*` through `common::Subprocess`
+│   └── yt/                       — split out of `YouTubeMusicProvider`
+│       ├── YtDlpCommands.hpp/cpp     — pure `build_search_command` / `build_playback_command` (no I/O)
+│       ├── YtDlpSearch.hpp/cpp       — pure `parse_search_output(...)` (TAB / `\\t` fallback, blank-line skip)
+│       └── YtPlaybackPipeline.hpp/cpp— owns the read loop + `StreamingSdlPlayer` lifecycle for one playback
 ├── learning/
 │   ├── store/                             — SQLite-backed persistence (façade + `detail::` free functions)
 │   │   ├── LearningStore.hpp              — Public façade (single connection, thin forwarders)
@@ -114,7 +136,11 @@ src/
 │   ├── TextChunker.hpp/cpp       — standalone chunking utility (prose + lines)
 │   ├── RetrievalService.hpp/cpp  — vector search helpers
 │   ├── ProgressTracker.hpp/cpp   — per-user learning log (grammar + pronunciation)
-│   ├── EnglishTutorProcessor.*   — RAG + grammar correction pipeline
+│   ├── EnglishTutorProcessor.*   — thin coordinator: RAG → chat → reply parse → progress log (delegates to `tutor/`)
+│   ├── tutor/                    — single-responsibility helpers behind `EnglishTutorProcessor`
+│   │   ├── TutorContextBuilder.hpp/cpp — wraps `RetrievalService::build_context` with the tutor's RAG knobs
+│   │   ├── TutorChatRequest.hpp/cpp    — pure `build_chat_body(ai, user, ctx)` (system + user message, UTF-8-safe dump)
+│   │   └── TutorReplyParser.hpp/cpp    — pure `parse_tutor_reply(raw, fallback)` → `GrammarCorrectionAction`
 │   ├── PronunciationDrillProcessor.hpp/cpp — thin coordinator for the drill pipeline
 │   ├── pronunciation/            — wav2vec2 + CTC forced alignment + GOP
 │   │   ├── PhonemeTypes.hpp      — shared data structs (Emissions, AlignSegment, …)
@@ -133,7 +159,7 @@ src/
 │   │   └── IntonationScorer.hpp/cpp — semitone DTW + final-direction rule
 │   └── cli/                      — `LearningApp` shared bootstrap + `english_ingest`, `english_tutor`, `pronunciation_drill` entries
 ├── actions/
-│   ├── ActionKind.hpp            — enum: None / LocalDevice / TopicSearch / MusicSearchPrompt / MusicPlayback / ExternalApi / EnglishLesson / GrammarCorrection / LessonModeToggle / PronunciationFeedback / DrillModeToggle
+│   ├── ActionKind.hpp            — enum: None / LocalDevice / TopicSearch / MusicSearchPrompt / MusicPlayback / MusicNotFound / MusicCancel / MusicPause / MusicResume / ExternalApi / EnglishLesson / GrammarCorrection / LessonModeToggle / PronunciationFeedback / DrillModeToggle
 │   ├── Action.hpp                — {kind, reply, transcript}
 │   ├── DeviceAction.hpp          — power control confirmation text
 │   ├── ExternalApiAction.hpp     — wraps API response
@@ -157,10 +183,13 @@ src/
     │   ├── PiperPipeBackend.hpp/cpp   — primary: raw PCM over pipes
     │   ├── PiperShellBackend.hpp/cpp  — legacy fallback: `echo | piper --output_file`
     │   └── PiperFallbackBackend.hpp/cpp— composite (primary → fallback) + default factory
+    ├── PlayPipeline.hpp/cpp      — `piper_speak_and_play` / `piper_speak_and_play_streaming` implementations (extracted so `PiperSpeech.cpp` can stay a true facade)
     ├── playback/                 — SDL playback policies
-    │   ├── SdlAudioDevice.hpp/cpp     — open / close / state
+    │   ├── SdlAudioDevice.hpp/cpp     — open / close / state (legacy buffered path)
+    │   ├── SdlMonoDevice.hpp/cpp      — RAII mono-int16 SDL device used by the streaming player
+    │   ├── PcmRingQueue.hpp/cpp       — `std::condition_variable`-backed PCM queue (replaces the old busy-sleep drain in `StreamingSdlPlayer`)
     │   ├── BufferedSdlPlayer.hpp/cpp  — pre-buffered one-shot playback
-    │   └── StreamingSdlPlayer.hpp/cpp — producer/consumer ring for low-latency stream
+    │   └── StreamingSdlPlayer.hpp/cpp — thin facade composing `SdlMonoDevice` + `PcmRingQueue`
     └── cli/TextToSpeech.cpp      — text_to_speech executable entry point
 ```
 
@@ -221,13 +250,39 @@ First handler to produce a non-empty `Action` wins. Covered by
 `tests/test_utterance_router.cpp` with stub callbacks and a canned
 `IHttpClient` behind the fallback.
 
+### Registry / Lookup table — `ActionKind → ActionSideEffectDescriptor`
+
+`voice/ActionSideEffectRegistry.*` keeps a static `descriptor_for(ActionKind)`
+table where each row is a `{ModeChange, ListenerMode target, music_hook,
+sets_pending_drill}` tuple. `VoiceListener::apply_local_intent_side_effects_`
+became a 10-line dispatch over the row instead of an 8-case
+`switch(ActionKind)`. Adding a new music / lesson intent is a one-row
+extension — there is nowhere left for the listener and the matcher to
+disagree on what a phrase means.
+
+### Strategy — pluggable music providers (`src/music/`)
+
+`MusicProvider` is the interface (`search`, `play`, `stop`, `pause`,
+`resume`); `YouTubeMusicProvider` is the only concrete strategy today
+and has been split into pure command builders (`yt/YtDlpCommands`),
+a pure search-output parser (`yt/YtDlpSearch`), and a playback pipeline
+(`yt/YtPlaybackPipeline`) that owns the `Subprocess` + `StreamingSdlPlayer`
+lifecycle. Adding Apple Music or any other back-end is a new
+`MusicProvider` + a row in `MusicFactory::make_provider_from_config`.
+
 ### Facade — thin coordinators over split collaborators
 
 `PiperSpeech` keeps the C-style public API (`piper_speak_and_play`, …) while
-delegating to backend + playback strategies; `PronunciationDrillProcessor`,
-`VoiceListener`, `Ingestor`, and `LearningStore` each stayed API-stable while
-their internals were broken into single-responsibility files. This is the
-escape hatch that let the refactor land without churning any call site.
+delegating to `tts/PlayPipeline` + backend / playback strategies;
+`EnglishTutorProcessor` keeps its public interface (`process` /
+`process_async`) while delegating to `tutor/TutorContextBuilder`,
+`tutor/TutorChatRequest`, and `tutor/TutorReplyParser`;
+`YouTubeMusicProvider` is now an orchestrator over `music/yt/`;
+`StreamingSdlPlayer` composes `SdlMonoDevice` + `PcmRingQueue`;
+`PronunciationDrillProcessor`, `VoiceListener`, `Ingestor`, and
+`LearningStore` each stayed API-stable while their internals were
+broken into single-responsibility files. This is the escape hatch
+that lets every refactor land without churning any call site.
 
 ### RAII + single-connection invariant
 
@@ -363,7 +418,9 @@ A thin façade composing two collaborators, seeded from `AiClientConfig`:
    - `turn on|turn off` + `air|switch` → `ActionKind::LocalDevice`
    - `tell me a story` → `ActionKind::InteractionTopicSearch`
    - `open music` → `ActionKind::MusicSearchPrompt` (enters `ListenerMode::Music`)
-   - `cancel|stop|exit music` → `ActionKind::MusicPlayback` (exits `Music` mode)
+   - `stop|cancel|exit|close|end music` → `ActionKind::MusicCancel` (aborts in-flight playback + exits `Music` mode)
+   - `pause music` → `ActionKind::MusicPause` (best-effort suspend)
+   - `continue|resume|unpause music` → `ActionKind::MusicResume`
    - lesson toggles → `ActionKind::LessonModeToggle`
    - drill toggles → `ActionKind::DrillModeToggle`
 
@@ -505,7 +562,11 @@ per-utterance shell fork/exec cost on the assistant / tutor reply path.
 | `LocalDevice` | Device regex match | "Okay, turn on/off the …" |
 | `InteractionTopicSearch` | Story regex match | User prompt text |
 | `MusicSearchPrompt` | `open music` regex match | "What music would you like to play?" — enters `ListenerMode::Music` |
-| `MusicPlayback` | `MusicSession` (after yt-dlp + ffmpeg) or `cancel/stop/exit music` | "Now playing …" / apology / cancellation; restores previous `ListenerMode` |
+| `MusicPlayback` | `MusicSession` (after yt-dlp resolves the track) | "Now playing …"; restores previous `ListenerMode` and engages the speaker-bleed gate on the VAD collector. Playback runs on a worker thread. |
+| `MusicNotFound` | `MusicSession` (search miss / empty query) | "Sorry, I couldn't find that song." — same mode exit as `MusicPlayback` but the bleed gate stays disengaged since no audio is playing. |
+| `MusicCancel` | `stop / cancel / exit / close / end music` regex | "Okay, stopping music." — aborts the worker thread via `MusicSession::abort()`. |
+| `MusicPause` | `pause music` regex | "Paused." — best-effort `provider.pause()`. |
+| `MusicResume` | `continue / resume / unpause music` regex | "Resuming." — counterpart to pause. |
 | `ExternalApi` | HTTP API call | API assistant reply |
 | `EnglishLesson` | (reserved — lesson-mode cue) | — |
 | `GrammarCorrection` | `EnglishTutorProcessor` (Lesson mode) | "You said … / Better … / Reason …" |
@@ -546,13 +607,14 @@ CMake modular structure under `cmake/`:
 | `deps_sqlite_vec.cmake` | SQLite + sqlite-vec (optional; sets `HECQUIN_HAS_SQLITE`) |
 | `deps_onnxruntime.cmake` | onnxruntime (optional; sets `HECQUIN_WITH_ONNX`) |
 | `dependency_libraries.cmake` | Interface library wrappers |
-| `sound_libs.cmake` | Internal static libs: `hecquin_config`, `hecquin_ai`, `hecquin_voice_pipeline`, `hecquin_learning`, `hecquin_prosody`, `hecquin_pronunciation`, `hecquin_drill` |
+| `sound_common.cmake` | Internal static lib: `hecquin_common` (Subprocess, ShellEscape, EnvParse, StringUtils, Utf8) — loaded before `piper_speech.cmake` and `sound_libs.cmake` so every higher lib can link it |
+| `sound_libs.cmake` | Internal static libs: `hecquin_config`, `hecquin_ai`, `hecquin_voice_pipeline`, `hecquin_music`, `hecquin_learning`, `hecquin_prosody`, `hecquin_pronunciation`, `hecquin_drill` |
 | `voice_to_text.cmake` | `voice_detector` executable |
 | `text_to_speech.cmake` | `text_to_speech` executable |
 | `english_tutor.cmake` | `english_ingest` + `english_tutor` executables |
 | `pronunciation_drill.cmake` | `pronunciation_drill` executable |
 | `piper_speech.cmake` | `hecquin_piper_speech` static library |
-| `sound_tests.cmake` | CTest unit tests (`openai_chat`, `utf8`, `local_intent`, `net_retry`, `voice_listener_vad`, `embedding_json`, `text_chunker`, `config_store`, `learning_store`, `phoneme_vocab`, `ctc_aligner`, `pronunciation_scorer`, `pitch_tracker`, `intonation_scorer`, `pronunciation_drill`, `english_tutor_processor`) — 16 tests, run via `ctest --output-on-failure` |
+| `sound_tests.cmake` | CTest unit tests — common (`utf8`, `shell_escape`, `subprocess`), config (`config_store`), ai (`openai_chat`, `local_intent`, `net_retry`), voice (`voice_listener_vad`, `noise_floor_tracker`, `music_side_effects`, `whisper_post_filter`, `utterance_router`), tts (`piper_backend_fallback`, `pcm_ring_queue`), music (`music_session`, `yt_dlp_commands`, `yt_dlp_search_parser`), learning (`embedding_json`, `text_chunker`, `learning_store`, `ingest_chunking_strategy`, `content_fingerprint`, `tutor_reply_parser`), pronunciation (`phoneme_vocab`, `ctc_aligner`, `pronunciation_scorer`), prosody (`pitch_tracker`, `intonation_scorer`), drill / tutor (`pronunciation_drill`, `english_tutor_processor`, `drill_sentence_picker`, `drill_reference_audio_lru`) — 30+ tests, run via `ctest --output-on-failure` |
 
 Key preprocessor defines set by CMake:
 
@@ -594,10 +656,25 @@ cheat sheet are documented in [`README.md`](./README.md).
 2. The next utterance arrives in `Music` mode. `UtteranceRouter` forwards
    the transcript to `MusicCallback` (the Music mode branch runs before
    Drill / Lesson so a user in an active learning session can still detour
-   into music). The callback lives in `MusicSession::handle`, which mutes
-   the mic with `AudioCapture::MuteGuard`, asks the injected
-   `MusicProvider` to search, then to play, and finally emits a
-   `MusicPlayback` action that drops the listener back into `home_mode_`.
+   into music). The callback lives in `MusicSession::handle`, which asks
+   the injected `MusicProvider` to search synchronously and — on a hit —
+   dispatches `provider.play()` to a private worker thread. `handle()`
+   returns a `MusicPlayback` action on a hit, or `MusicNotFound` on a
+   miss / empty query, immediately so the listener drops back into
+   `home_mode_` and keeps capturing voice while the song streams.
+3. Mid-song, the listener still feeds every utterance through
+   `LocalIntentMatcher` first.  `stop / cancel / exit / close / end
+   music` resolves to `MusicAction::cancel` (`ActionKind::MusicCancel`);
+   the listener's `voice/MusicSideEffects` collaborator invokes
+   `MusicSession::abort` → `provider.stop()`, joining the worker thread
+   before the cancel TTS reply is spoken so the apology doesn't fight
+   the song for the speakers.  `pause music` and `continue / resume /
+   unpause music` similarly map to `MusicAction::pause / resume`,
+   forwarded through best-effort `MusicProvider::pause / resume`
+   methods (the default `YouTubeMusicProvider` toggles its SDL device).
+   The same collaborator owns the `set_external_audio_active` /
+   `reset_noise_floor` toggles on the VAD collector so speaker bleed
+   never poisons the adaptive noise floor; see `voice/MusicSideEffects.hpp`.
 
 **Providers (`MusicProvider` interface).** Extensible by design:
 

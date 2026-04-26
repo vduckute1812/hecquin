@@ -1,7 +1,6 @@
 #pragma once
 
 #include "music/MusicProvider.hpp"
-#include "tts/playback/StreamingSdlPlayer.hpp"
 
 #include <atomic>
 #include <memory>
@@ -9,6 +8,10 @@
 #include <string>
 
 namespace hecquin::music {
+
+namespace yt {
+class YtPlaybackPipeline;
+}
 
 /** Runtime configuration for the YouTube Music back-end. */
 struct YouTubeMusicConfig {
@@ -33,9 +36,10 @@ struct YouTubeMusicConfig {
 
 /**
  * `yt-dlp` + `ffmpeg` powered back-end.  `search()` runs a single
- * `ytsearch1:` query and parses the title / URL.  `play()` spawns a
- * subprocess pipeline that pipes bestaudio through ffmpeg decoding to
- * raw mono int16 PCM and pumps it into `StreamingSdlPlayer`.
+ * `ytsearch1:` query and parses the title / URL via
+ * `music::yt::parse_search_output`.  `play()` builds the pipeline shell
+ * command via `music::yt::build_playback_command` and dispatches the
+ * read-loop / SDL lifecycle to `music::yt::YtPlaybackPipeline`.
  *
  * Auth: if `cookies_file` is non-empty and exists, both subprocesses get
  * `--cookies <path>` (yt-dlp) so a signed-in Premium account can skip
@@ -52,6 +56,8 @@ public:
     std::optional<MusicTrack> search(const std::string& query) override;
     bool play(const MusicTrack& track) override;
     void stop() override;
+    void pause() override;
+    void resume() override;
 
     const YouTubeMusicConfig& config() const { return cfg_; }
 
@@ -64,7 +70,7 @@ private:
      */
     std::atomic<int> child_pid_{0};
     std::atomic<bool> aborted_{false};
-    std::unique_ptr<hecquin::tts::playback::StreamingSdlPlayer> player_;
+    std::unique_ptr<yt::YtPlaybackPipeline> pipeline_;
 };
 
 } // namespace hecquin::music

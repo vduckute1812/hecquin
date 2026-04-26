@@ -42,14 +42,46 @@ int main() {
     }
     {
         const auto got = matcher.match("cancel music please");
-        if (!got || got->kind != ActionKind::MusicPlayback) {
-            return fail("cancel music -> MusicPlayback");
+        if (!got || got->kind != ActionKind::MusicCancel) {
+            return fail("cancel music -> MusicCancel");
         }
     }
     {
         const auto got = matcher.match("stop music");
-        if (!got || got->kind != ActionKind::MusicPlayback) {
-            return fail("stop music -> MusicPlayback");
+        if (!got || got->kind != ActionKind::MusicCancel) {
+            return fail("stop music -> MusicCancel");
+        }
+    }
+    {
+        const auto got = matcher.match("end music now");
+        if (!got || got->kind != ActionKind::MusicCancel) {
+            return fail("end music -> MusicCancel");
+        }
+    }
+    {
+        const auto got = matcher.match("pause music");
+        if (!got || got->kind != ActionKind::MusicPause) {
+            return fail("pause music -> MusicPause");
+        }
+    }
+    {
+        const auto got = matcher.match("continue music please");
+        if (!got || got->kind != ActionKind::MusicResume) {
+            return fail("continue music -> MusicResume");
+        }
+    }
+    {
+        const auto got = matcher.match("resume music");
+        if (!got || got->kind != ActionKind::MusicResume) {
+            return fail("resume music -> MusicResume");
+        }
+    }
+    {
+        // The pause/resume patterns must not steal "open music" — that
+        // still has to enter the search prompt flow.
+        const auto got = matcher.match("open music now");
+        if (!got || got->kind != ActionKind::MusicSearchPrompt) {
+            return fail("open music -> MusicSearchPrompt (post pause/resume)");
         }
     }
     {

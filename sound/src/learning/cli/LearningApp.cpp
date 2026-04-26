@@ -108,11 +108,7 @@ hecquin::ai::LocalIntentMatcherConfig LearningApp::matcher_config() const {
     // const_cast keeps the public `LearningApp::matcher_config()` const without
     // forcing a VoiceApp change for one call site.
     const AppConfig& cfg = const_cast<LearningApp*>(this)->voice_app_.config();
-    return hecquin::ai::LocalIntentMatcherConfig::from_phrase_lists(
-        cfg.learning.lesson_start_phrases,
-        cfg.learning.lesson_end_phrases,
-        cfg.learning.drill_start_phrases,
-        cfg.learning.drill_end_phrases);
+    return hecquin::ai::LocalIntentMatcherConfig::make_from_learning(cfg.learning);
 }
 
 void LearningApp::shutdown() {

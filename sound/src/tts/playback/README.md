@@ -8,9 +8,11 @@ consumer plumbing.
 
 | File | Purpose |
 |---|---|
-| `SdlAudioDevice.hpp/cpp` | Open / close / re-open the SDL audio device at the requested sample rate. Owns `SDL_AudioDeviceID` and keeps a bool so the device is not re-opened needlessly across utterances. |
+| `SdlAudioDevice.hpp/cpp` | Open / close / re-open the SDL audio device at the requested sample rate. Owns `SDL_AudioDeviceID` and keeps a bool so the device is not re-opened needlessly across utterances. Used by the buffered player. |
+| `SdlMonoDevice.hpp/cpp` | RAII wrapper around the SDL mono-int16 device used by the streaming player. Lifecycle only — no buffer state or signalling lives here. |
+| `PcmRingQueue.hpp/cpp` | Mutex + `std::condition_variable` + `std::deque<int16_t>` + `eof_` flag. Replaces the busy-sleep drain that lived in the old `StreamingSdlPlayer`. Methods: `push`, `pop_into(uint8_t* dst, int len)` (drain into the SDL callback buffer), `mark_eof`, `wait_until_drained()`. Tested in isolation by `tests/tts/test_pcm_ring_queue.cpp`. |
 | `BufferedSdlPlayer.hpp/cpp` | One-shot pre-buffered playback: queue all PCM at once, wait for drain, return. Used for the drill reference audio (we already have the full buffer). |
-| `StreamingSdlPlayer.hpp/cpp` | Producer / consumer ring: SDL callback drains chunks until EOF is signalled. Playback starts as soon as the first chunk is pushed, so long replies don't stall the mic re-open. Used for `piper_speak_and_play_streaming`. |
+| `StreamingSdlPlayer.hpp/cpp` | Thin facade composing `SdlMonoDevice` + `PcmRingQueue`. Playback starts as soon as the first chunk is pushed, so long replies don't stall the mic re-open. Used for `piper_speak_and_play_streaming`. |
 
 ## Notes
 

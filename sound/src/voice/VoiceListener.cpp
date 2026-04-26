@@ -1,39 +1,47 @@
 #include "voice/VoiceListener.hpp"
 
+#include "common/EnvParse.hpp"
+#include "voice/ActionSideEffectRegistry.hpp"
+#include "voice/PipelineTelemetry.hpp"
 #include "voice/SecondaryVadGate.hpp"
 #include "voice/TtsResponsePlayer.hpp"
 #include "voice/UtteranceCollector.hpp"
 #include "voice/UtteranceRouter.hpp"
 
-#include <algorithm>
 #include <chrono>
-#include <cstdlib>
 #include <iostream>
-#include <sstream>
 #include <thread>
 #include <utility>
 
-namespace {
-
-bool parse_float_env(const char* name, float& out) {
-    const char* raw = std::getenv(name);
-    if (!raw || *raw == '\0') return false;
-    try {
-        out = std::stof(raw);
-        return true;
-    } catch (...) {
-        std::cerr << "[voice] ignoring invalid " << name << "=" << raw << std::endl;
-        return false;
-    }
-}
-
-} // namespace
-
 void VoiceListenerConfig::apply_env_overrides() {
+    namespace env = hecquin::common::env;
     float v = 0.0f;
-    if (parse_float_env("HECQUIN_VAD_VOICE_RMS_THRESHOLD", v)) voice_rms_threshold = v;
-    if (parse_float_env("HECQUIN_VAD_MIN_VOICED_RATIO", v))    min_voiced_frame_ratio = v;
-    if (parse_float_env("HECQUIN_VAD_MIN_UTTERANCE_RMS", v))   min_utterance_rms = v;
+    if (env::parse_float("HECQUIN_VAD_VOICE_RMS_THRESHOLD", v)) {
+        voice_rms_threshold = v;
+        voice_rms_threshold_pinned = true;
+    }
+    if (env::parse_float("HECQUIN_VAD_MIN_VOICED_RATIO", v)) min_voiced_frame_ratio = v;
+    if (env::parse_float("HECQUIN_VAD_MIN_UTTERANCE_RMS", v)) {
+        min_utterance_rms = v;
+        min_utterance_rms_pinned = true;
+    }
+
+    if (env::parse_float("HECQUIN_VAD_K_START", v))    k_start = v;
+    if (env::parse_float("HECQUIN_VAD_K_CONTINUE", v)) k_continue = v;
+    if (env::parse_float("HECQUIN_VAD_K_UTT", v))      k_utt = v;
+    if (env::parse_float("HECQUIN_VAD_MIN_START_THR", v)) adaptive_min_start_thr = v;
+
+    int iv = 0;
+    if (env::parse_int("HECQUIN_VAD_MAX_UTTERANCE_MS", iv)) max_utterance_ms = iv;
+
+    bool flag = false;
+    if (env::parse_bool("HECQUIN_VAD_AUTO", flag)) {
+        auto_calibrate = flag;
+        auto_adapt = flag;
+    }
+    if (env::parse_bool("HECQUIN_VAD_DEBUG", flag)) {
+        debug = flag;
+    }
 }
 
 VoiceListener::VoiceListener(WhisperEngine& whisper,
@@ -52,9 +60,16 @@ VoiceListener::VoiceListener(WhisperEngine& whisper,
         capture_, cfg_, app_running_);
     player_ = std::make_unique<hecquin::voice::TtsResponsePlayer>(
         capture_, piper_model_path_);
+    telemetry_ = std::make_unique<hecquin::voice::PipelineTelemetry>();
+    music_fx_.set_collector(collector_.get());
 }
 
 VoiceListener::~VoiceListener() = default;
+
+void VoiceListener::setPipelineEventSink(PipelineEventSink s) {
+    event_sink_ = s;
+    if (telemetry_) telemetry_->set_sink(std::move(s));
+}
 
 VoiceListener::VadGateDecision VoiceListener::evaluate_secondary_gate(
     int voiced_frames, int effective_frames, float mean_rms,
@@ -73,39 +88,43 @@ const char* VoiceListener::current_mode_label_() const {
 }
 
 void VoiceListener::apply_local_intent_side_effects_(const Action& local) {
-    // Mode we fall back to when the user exits a temporary sub-mode.
-    // If their home is the very mode they're exiting, drop to Assistant
-    // so they aren't stuck (e.g. in english_tutor, "exit lesson" should
-    // actually exit lesson even though home is Lesson).
-    auto exit_target = [this](ListenerMode leaving) {
+    using MC = hecquin::voice::ActionSideEffectDescriptor::ModeChange;
+
+    // Fall-back target when the user exits a temporary sub-mode.  If
+    // their home is the very mode they're exiting, drop to Assistant
+    // so they aren't stuck (e.g. in english_tutor, "exit lesson"
+    // should actually exit lesson even though home is Lesson).
+    const auto exit_target = [this](ListenerMode leaving) {
         return home_mode_ == leaving ? ListenerMode::Assistant : home_mode_;
     };
 
-    if (local.kind == ActionKind::LessonModeToggle) {
-        mode_ = local.enable ? ListenerMode::Lesson
-                             : exit_target(ListenerMode::Lesson);
-    } else if (local.kind == ActionKind::DrillModeToggle) {
-        mode_ = local.enable ? ListenerMode::Drill
-                             : exit_target(ListenerMode::Drill);
+    const auto& d = hecquin::voice::descriptor_for(local.kind);
+    switch (d.mode_change) {
+        case MC::None:           break;
+        case MC::Enter:          mode_ = d.mode_value; break;
+        case MC::ExitTo:         mode_ = exit_target(d.mode_value); break;
+        case MC::EnterIfEnable:
+            mode_ = local.enable ? d.mode_value
+                                 : exit_target(d.mode_value);
+            break;
+    }
+
+    if (d.sets_pending_drill_from_enable) {
         pending_drill_announce_ =
             local.enable && static_cast<bool>(drill_announce_cb_);
-    } else if (local.kind == ActionKind::MusicSearchPrompt) {
-        // Enter a short-lived "awaiting song name" mode.  The next
-        // utterance is interpreted as the query, handled by music_cb_,
-        // and produces a MusicPlayback action that restores home_mode_.
-        mode_ = ListenerMode::Music;
-    } else if (local.kind == ActionKind::MusicPlayback) {
-        // Either the session finished playing / failed, or the user said
-        // "cancel music".  Either way, leave Music mode.
-        mode_ = exit_target(ListenerMode::Music);
+    }
+
+    if (d.music_hook) {
+        (music_fx_.*d.music_hook)();
     }
 }
 
-void VoiceListener::handle_vad_rejection_(const hecquin::voice::VadGateDecision& gate,
-                                          int speech_ms) {
+void VoiceListener::log_vad_rejection_(
+    const hecquin::voice::VadGateDecision& gate) const {
     if (gate.too_quiet) {
         std::cout << "🔇 Skipping noise (too_quiet: mean_rms="
-                  << gate.mean_rms << " < " << cfg_.min_utterance_rms
+                  << gate.mean_rms << " < "
+                  << collector_->effective_min_utterance_rms()
                   << ")" << std::endl;
     }
     if (gate.too_sparse) {
@@ -114,24 +133,110 @@ void VoiceListener::handle_vad_rejection_(const hecquin::voice::VadGateDecision&
                   << cfg_.min_voiced_frame_ratio << ")" << std::endl;
     }
     std::cout << std::endl;
-    if (event_sink_) {
-        // Tiny hand-rolled JSON — avoids pulling nlohmann into the
-        // voice library just for a couple of attrs.
-        std::ostringstream attrs;
-        attrs << "{\"reason\":\""
-              << (gate.too_quiet ? (gate.too_sparse ? "too_quiet+too_sparse" : "too_quiet")
-                                 : "too_sparse")
-              << "\",\"mean_rms\":" << gate.mean_rms
-              << ",\"voiced_ratio\":" << gate.voiced_ratio
-              << ",\"speech_ms\":" << speech_ms << "}";
-        event_sink_({"vad_gate", "skipped", speech_ms, attrs.str()});
+}
+
+void VoiceListener::print_startup_banner_() const {
+    std::cout << "\n🎤 Listening..." << std::endl;
+    if (cfg_.auto_calibrate) {
+        std::cout << "Auto-VAD on (k_start=" << cfg_.k_start
+                  << ", k_continue=" << cfg_.k_continue
+                  << ", k_utt=" << cfg_.k_utt
+                  << ", adapt=" << (cfg_.auto_adapt ? "yes" : "no")
+                  << "). Set HECQUIN_VAD_AUTO=0 to use static thresholds."
+                  << std::endl;
+        std::cout << "Calibrating noise floor for ~"
+                  << cfg_.calibration_ms
+                  << " ms — please stay quiet. Speak after the "
+                  << "🎯 line." << std::endl;
+    } else {
+        std::cout << "Auto-VAD off (start_thr=" << cfg_.voice_rms_threshold
+                  << ", min_utt_rms=" << cfg_.min_utterance_rms << ")."
+                  << std::endl;
+        std::cout << "Speak anytime!" << std::endl;
+    }
+    std::cout << "Press Ctrl+C to exit.\n" << std::endl;
+}
+
+bool VoiceListener::gate_accepts_(
+    const hecquin::voice::CollectedUtterance& utt) {
+    // The collector's dynamic min-utterance-rms keeps the secondary
+    // gate in lockstep with the primary VAD (both auto-tune from the
+    // same noise floor when `cfg_.auto_calibrate` is on).
+    const float effective_min_utt_rms =
+        collector_->effective_min_utterance_rms();
+    const auto gate = hecquin::voice::evaluate_for_utterance(
+        utt, cfg_.poll_interval_ms,
+        effective_min_utt_rms, cfg_.min_voiced_frame_ratio);
+
+    if (gate.accept) return true;
+
+    log_vad_rejection_(gate);
+    if (telemetry_) telemetry_->emit_vad_rejection(gate, utt.speech_ms);
+    capture_.clearBuffer();
+    std::this_thread::sleep_for(std::chrono::milliseconds(cfg_.poll_interval_ms));
+    return false;
+}
+
+std::string VoiceListener::transcribe_and_emit_(
+    const hecquin::voice::CollectedUtterance& utt) {
+    std::string transcript = whisper_.transcribe(utt.pcm);
+    if (telemetry_) {
+        telemetry_->emit_whisper(whisper_.last_latency_ms(),
+                                 whisper_.last_no_speech_prob(),
+                                 transcript.size(), utt.speech_ms,
+                                 /*ok=*/!transcript.empty());
+    }
+    return transcript;
+}
+
+void VoiceListener::handle_routed_(const Action& action) {
+    // Side effects run for any action that can flip listener state.
+    // Lesson/Drill toggles always come from local intent; MusicPlayback
+    // can also be emitted by music_cb_ at the end of a song, so we
+    // intentionally do not gate on `from_local_intent` — the function
+    // switches on `kind`.
+    apply_local_intent_side_effects_(action);
+    player_->speak(action, current_mode_label_());
+}
+
+void VoiceListener::maybe_announce_drill_(ActionKind action_kind) {
+    // After a scored drill attempt, queue an announcement of the next
+    // target sentence so the session flows without needing a new wake
+    // phrase between attempts.
+    if (action_kind == ActionKind::PronunciationFeedback &&
+        mode_ == ListenerMode::Drill && drill_announce_cb_) {
+        pending_drill_announce_ = true;
+    }
+    if (pending_drill_announce_ && drill_announce_cb_) {
+        pending_drill_announce_ = false;
+        // The announce callback synthesises + plays the target
+        // sentence; the same MuteGuard guards the mic so we don't
+        // immediately re-detect our own speaker output.
+        AudioCapture::MuteGuard mute(capture_);
+        drill_announce_cb_();
     }
 }
 
-void VoiceListener::run() {
-    std::cout << "\n🎤 Listening... (Speak anytime!)" << std::endl;
-    std::cout << "Press Ctrl+C to exit.\n" << std::endl;
+void VoiceListener::process_utterance_(
+    hecquin::voice::CollectedUtterance& utt,
+    hecquin::voice::UtteranceRouter& router) {
+    if (!gate_accepts_(utt)) return;
 
+    const std::string transcript = transcribe_and_emit_(utt);
+    if (!transcript.empty()) {
+        Utterance utterance{transcript, utt.pcm};
+        const auto routed = router.route(utterance);
+        handle_routed_(routed.action);
+        maybe_announce_drill_(routed.action.kind);
+        std::cout << std::endl;
+    }
+
+    capture_.clearBuffer();
+    std::cout << "🎤 Listening again...\n" << std::endl;
+}
+
+void VoiceListener::run() {
+    print_startup_banner_();
     capture_.resumeDevice();
 
     hecquin::voice::UtteranceRouter router(
@@ -143,75 +248,7 @@ void VoiceListener::run() {
     while (app_running_.load()) {
         auto maybe = collector_->collect_next();
         if (!maybe) break;
-        auto& utt = *maybe;
-
-        // Secondary VAD gate: only hand the buffer to Whisper when the
-        // utterance was sustainedly voiced and loud enough on average.
-        // Subtract the terminal silence tail from the denominator so
-        // short utterances aren't unfairly punished.
-        const int tail_silence_frames =
-            cfg_.poll_interval_ms > 0 ? utt.silence_ms / cfg_.poll_interval_ms : 0;
-        const int effective_frames =
-            std::max(1, utt.total_frames - tail_silence_frames);
-        const float utt_rms =
-            utt.pcm.empty()
-                ? 0.0f
-                : hecquin::voice::UtteranceCollector::rms(utt.pcm, 0, utt.pcm.size());
-        const auto gate = hecquin::voice::evaluate_secondary_gate(
-            utt.voiced_frames, effective_frames, utt_rms,
-            cfg_.min_utterance_rms, cfg_.min_voiced_frame_ratio);
-
-        if (!gate.accept) {
-            handle_vad_rejection_(gate, utt.speech_ms);
-            capture_.clearBuffer();
-            std::this_thread::sleep_for(std::chrono::milliseconds(cfg_.poll_interval_ms));
-            continue;
-        }
-
-        const std::string transcript = whisper_.transcribe(utt.pcm);
-        if (event_sink_) {
-            std::ostringstream attrs;
-            attrs << "{\"no_speech_prob\":" << whisper_.last_no_speech_prob()
-                  << ",\"chars\":" << transcript.size()
-                  << ",\"speech_ms\":" << utt.speech_ms << "}";
-            event_sink_({"whisper",
-                         transcript.empty() ? "skipped" : "ok",
-                         whisper_.last_latency_ms(),
-                         attrs.str()});
-        }
-
-        if (!transcript.empty()) {
-            Utterance utterance{transcript, utt.pcm};
-            const auto routed = router.route(utterance);
-            // Side effects run for any action that can flip listener
-            // state (Lesson/Drill toggles always come from local intent;
-            // MusicPlayback can also be emitted by the music_cb_ at the
-            // end of a song, so we intentionally do not gate on
-            // `from_local_intent` here — the function itself switches
-            // on `kind`).
-            apply_local_intent_side_effects_(routed.action);
-            player_->speak(routed.action, current_mode_label_());
-
-            // After a scored drill attempt, automatically announce the
-            // next target sentence so the session flows without needing
-            // a new wake phrase between attempts.
-            if (routed.action.kind == ActionKind::PronunciationFeedback &&
-                mode_ == ListenerMode::Drill && drill_announce_cb_) {
-                pending_drill_announce_ = true;
-            }
-            if (pending_drill_announce_ && drill_announce_cb_) {
-                pending_drill_announce_ = false;
-                // The announce callback synthesises + plays the target
-                // sentence; use the same MuteGuard so we don't
-                // immediately re-detect our own speaker output.
-                AudioCapture::MuteGuard mute(capture_);
-                drill_announce_cb_();
-            }
-            std::cout << std::endl;
-        }
-
-        capture_.clearBuffer();
-        std::cout << "🎤 Listening again...\n" << std::endl;
+        process_utterance_(*maybe, router);
     }
 
     capture_.pauseDevice();

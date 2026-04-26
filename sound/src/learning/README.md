@@ -14,13 +14,14 @@ utilities; the heavy lifting is split across five sub-folders.
 | `TextChunker.hpp/cpp` | Standalone chunkers: `chunk_text` (prose, budget + overlap, whitespace-preferred) and `chunk_lines` (line-boundary-preserving). Reused by the `ingest/` Strategy implementations and directly by tests. |
 | `RetrievalService.hpp/cpp` | Convenience wrapper around `LearningStore::query_top_k` that handles embedding + truncation. |
 | `ProgressTracker.hpp/cpp` | Per-user learning log — grammar interactions + pronunciation attempts. Owns the `LearningStore` sessions lifecycle. |
-| `EnglishTutorProcessor.hpp/cpp` | RAG + grammar-correction pipeline. Embeds the transcript, pulls top-K docs, calls Gemini, parses the three-line reply into a `GrammarCorrectionAction`. Uses `ai::short_reply_for_status` for consistent error replies. |
+| `EnglishTutorProcessor.hpp/cpp` | Thin coordinator for the lesson-mode pipeline. Delegates RAG context to [`tutor/TutorContextBuilder`](./tutor/TutorContextBuilder.hpp), JSON body assembly to [`tutor/TutorChatRequest`](./tutor/TutorChatRequest.hpp), and reply parsing to [`tutor/TutorReplyParser`](./tutor/TutorReplyParser.hpp). Public API (`process`, `process_async`) unchanged. |
 | `PronunciationDrillProcessor.hpp/cpp` | Thin coordinator for the drill. Orchestrates [`pronunciation/drill/`](./pronunciation/drill/README.md). Public API (`load`, `pick_and_announce`, `score`, `available`) is unchanged from pre-refactor. |
 | `Vocabulary.hpp/cpp` | Shared `normalise(word)` — lowercase alpha + apostrophe. One source of truth for `ProgressTracker::tokenize` and `LearningStore::touch_vocab`. |
 
 ## Sub-folders
 
 - [`cli/`](./cli/README.md) — `LearningApp` bootstrap + the three binary entry points (`english_ingest`, `english_tutor`, `pronunciation_drill`).
+- [`tutor/`](./tutor/README.md) — single-responsibility helpers behind `EnglishTutorProcessor` (RAG context builder, chat request body, reply parser).
 - [`ingest/`](./ingest/README.md) — file discovery, fingerprinting, chunking strategy, embedding batching, document persistence, CLI progress.
 - [`pronunciation/`](./pronunciation/README.md) — wav2vec2 + CTC forced alignment + GOP scoring, plus the [`drill/`](./pronunciation/drill/README.md) collaborators.
 - [`prosody/`](./prosody/README.md) — YIN pitch tracker + semitone-DTW intonation scorer.

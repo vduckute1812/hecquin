@@ -1,9 +1,5 @@
 #include "tts/playback/StreamingSdlPlayer.hpp"
 
-#include "tts/playback/SdlAudioDevice.hpp"
-
-#include <SDL.h>
-
 #include <chrono>
 #include <thread>
 
@@ -15,21 +11,11 @@ constexpr int kAudioBufferSamples = 4096;
 
 } // namespace
 
-void streaming_callback(void* userdata, Uint8* stream, int len) {
+void StreamingSdlPlayer::sdl_callback_(void* userdata,
+                                       std::uint8_t* stream,
+                                       int len) {
     auto* player = static_cast<StreamingSdlPlayer*>(userdata);
-    auto* out = reinterpret_cast<std::int16_t*>(stream);
-    const int requested = len / static_cast<int>(sizeof(std::int16_t));
-
-    std::unique_lock<std::mutex> lock(player->mu_);
-    int filled = 0;
-    while (filled < requested && !player->queue_.empty()) {
-        out[filled++] = player->queue_.front();
-        player->queue_.pop_front();
-    }
-    for (int i = filled; i < requested; ++i) out[i] = 0;
-    if (player->eof_ && player->queue_.empty()) {
-        player->done_.store(true, std::memory_order_release);
-    }
+    player->queue_.pop_into(stream, len);
 }
 
 StreamingSdlPlayer::~StreamingSdlPlayer() {
@@ -37,11 +23,8 @@ StreamingSdlPlayer::~StreamingSdlPlayer() {
 }
 
 bool StreamingSdlPlayer::start(int sample_rate) {
-    if (!ensure_audio_init()) {
-        return false;
-    }
-    dev_ = open_mono_s16_device(&streaming_callback, this, sample_rate, kAudioBufferSamples);
-    if (dev_ == 0) {
+    if (!device_.open(&StreamingSdlPlayer::sdl_callback_, this,
+                      sample_rate, kAudioBufferSamples)) {
         return false;
     }
     // Cushion the callback against synth startup latency (~62 ms at
@@ -51,50 +34,45 @@ bool StreamingSdlPlayer::start(int sample_rate) {
 }
 
 void StreamingSdlPlayer::push(const std::int16_t* data, std::size_t n_samples) {
-    if (dev_ == 0) return;
-    {
-        std::lock_guard<std::mutex> lock(mu_);
-        queue_.insert(queue_.end(), data, data + n_samples);
-    }
-    if (!started_) {
-        std::size_t queued = 0;
-        {
-            std::lock_guard<std::mutex> lock(mu_);
-            queued = queue_.size();
-        }
-        if (queued >= prebuffer_samples_) {
-            SDL_PauseAudioDevice(dev_, 0);
-            started_ = true;
-        }
+    if (!device_.is_open()) return;
+    queue_.push(data, n_samples);
+    if (!started_ && queue_.size() >= prebuffer_samples_) {
+        device_.set_paused(false);
+        started_ = true;
     }
 }
 
 void StreamingSdlPlayer::finish() {
-    if (dev_ == 0) return;
-    {
-        std::lock_guard<std::mutex> lock(mu_);
-        eof_ = true;
-    }
+    if (!device_.is_open()) return;
+    queue_.mark_eof();
     if (!started_) {
-        SDL_PauseAudioDevice(dev_, 0);
+        device_.set_paused(false);
         started_ = true;
     }
 }
 
 void StreamingSdlPlayer::wait_until_drained() {
-    if (dev_ == 0) return;
-    while (!done_.load(std::memory_order_acquire)) {
-        std::this_thread::sleep_for(std::chrono::milliseconds(20));
-    }
-    // Let the DAC drain before we yank the device.
+    if (!device_.is_open()) return;
+    queue_.wait_until_drained();
+    // Let the DAC drain before we yank the device.  SDL has no public
+    // "callback finished" hook, and the cv signals as soon as the
+    // *queue* is empty — the hardware buffer can still be playing the
+    // last frame for ~ one period after that.
     std::this_thread::sleep_for(std::chrono::milliseconds(80));
 }
 
+bool StreamingSdlPlayer::set_paused(bool paused) {
+    if (!device_.is_open()) return false;
+    device_.set_paused(paused);
+    // `started_` tracks whether playback has been kicked off at all;
+    // a pause should not roll that bit back, otherwise resuming would
+    // re-trigger the prebuffer threshold logic in `push()`.
+    if (!paused) started_ = true;
+    return true;
+}
+
 void StreamingSdlPlayer::stop() {
-    if (dev_ != 0) {
-        SDL_CloseAudioDevice(dev_);
-        dev_ = 0;
-    }
+    device_.close();
 }
 
 } // namespace hecquin::tts::playback

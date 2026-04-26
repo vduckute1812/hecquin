@@ -28,10 +28,16 @@ struct MusicTrack {
  *   - `search()` returns the top candidate for `query` (or `nullopt` if
  *     the provider couldn't resolve anything).  Must NOT play audio.
  *   - `play()` is blocking — it should not return until playback has
- *     drained or been aborted.  Must be safe to call with the microphone
- *     muted by a `AudioCapture::MuteGuard` in the caller.
+ *     drained or been aborted.  `MusicSession` runs it on a background
+ *     thread so the listener can keep capturing voice while audio
+ *     streams.
  *   - `stop()` may be invoked concurrently from another thread to break
- *     `play()` early (e.g. on SIGINT).  Idempotent.
+ *     `play()` early (e.g. on SIGINT or a "stop music" intent).
+ *     Idempotent.
+ *   - `pause()` / `resume()` are best-effort.  The default implementation
+ *     is a no-op so providers that can't suspend their pipeline (e.g. a
+ *     hypothetical streamer that has no SDL device of its own) still
+ *     compile without ceremony — callers should treat them as advisory.
  */
 class MusicProvider {
 public:
@@ -40,6 +46,11 @@ public:
     virtual std::optional<MusicTrack> search(const std::string& query) = 0;
     virtual bool play(const MusicTrack& track) = 0;
     virtual void stop() = 0;
+    /** Best-effort: suspend the audio device without tearing down the
+     *  decoder pipeline.  Default no-op. */
+    virtual void pause() {}
+    /** Best-effort: counterpart to `pause()`.  Default no-op. */
+    virtual void resume() {}
 };
 
 } // namespace hecquin::music

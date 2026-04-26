@@ -9,7 +9,7 @@ reply plus whatever extra context the caller needs to react.
 
 | File | Purpose |
 |---|---|
-| `ActionKind.hpp` | `enum class ActionKind` — `None`, `LocalDevice`, `InteractionTopicSearch`, `MusicSearchPrompt`, `MusicPlayback`, `ExternalApi`, `EnglishLesson`, `LessonModeToggle`, `PronunciationFeedback`, `DrillModeToggle`. |
+| `ActionKind.hpp` | `enum class ActionKind` — `None`, `LocalDevice`, `InteractionTopicSearch`, `MusicSearchPrompt`, `MusicPlayback`, `MusicNotFound`, `MusicCancel`, `MusicPause`, `MusicResume`, `ExternalApi`, `EnglishLesson`, `LessonModeToggle`, `PronunciationFeedback`, `DrillModeToggle`. |
 | `Action.hpp` | The canonical value type: `{ kind, reply, transcript, enable }`. `enable` is only meaningful for the two `*ModeToggle` kinds (set by `LocalIntentMatcher`). Includes `actionKindLabel(ActionKind)` for logs. |
 | `DeviceAction.hpp` | Smart-home style confirmations (`"turning the air on"`). |
 | `ExternalApiAction.hpp` | Wraps the chat-completion reply when nothing local matched. |
@@ -65,6 +65,10 @@ classDiagram
         InteractionTopicSearch
         MusicSearchPrompt
         MusicPlayback
+        MusicNotFound
+        MusicCancel
+        MusicPause
+        MusicResume
         ExternalApi
         EnglishLesson
         LessonModeToggle
