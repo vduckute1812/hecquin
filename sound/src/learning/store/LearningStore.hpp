@@ -106,6 +106,25 @@ public:
     std::vector<std::string> weakest_phonemes(int n, int min_attempts = 2) const;
 
     /**
+     * Tier-4 #16: insert-or-find the user row for `display_name`.
+     * Returns the row's `id` (or `nullopt` on DB error).  Keeps the
+     * single source of truth out of the listener / app layer — they
+     * just call `upsert_user("Mia")` and stash the returned id in
+     * their own state.
+     */
+    std::optional<int64_t> upsert_user(const std::string& display_name);
+
+    /**
+     * Tier-4 #17: average pronunciation score across the most recent
+     * `limit` `pronunciation_attempts` rows (entire table by default).
+     * Returns `nullopt` when no attempts have been recorded yet.
+     * Optionally filtered to a specific `user_id` for the recap line.
+     */
+    std::optional<float> last_session_pronunciation_score(
+        int limit = 10,
+        std::optional<int64_t> user_id = std::nullopt) const;
+
+    /**
      * Append one outbound API call log row (LLM/embedding/etc.). Written by the
      * C++ `LoggingHttpClient` decorator on every request; read by the dashboard
      * module to chart daily traffic, latency, and error rates.

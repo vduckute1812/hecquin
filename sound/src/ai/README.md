@@ -24,7 +24,7 @@ RetryingHttpClient
 
 | File | Purpose |
 |---|---|
-| `LocalIntentMatcher.hpp/cpp` | Case-insensitive regex matcher. Patterns come from `AppConfig::learning` (lesson/drill phrases) plus built-ins for device / story / music intents. Returns a typed `std::optional<ActionMatch>` so the caller never has to re-run the regex to decide which toggle fired. |
+| `LocalIntentMatcher.hpp/cpp` | Case-insensitive regex matcher. Patterns come from `AppConfig::learning` (lesson/drill phrases) plus built-ins for device / story / music / UX intents. Returns a typed `std::optional<ActionMatch>` so the caller never has to re-run the regex to decide which toggle fired. Built-in patterns now cover: `device` (turn on/off), `story`, `music` (open/cancel/pause/resume/volume up/down/skip), `lesson_start/end`, `drill_start/end/advance`, `abort` (universal stop), `help`, `sleep` / `wake`, and `identify_user` (with name capture group). |
 | `ChatClient.hpp/cpp` | OpenAI-compatible chat-completions client. Takes an `IHttpClient&` so tests can inject a canned response. |
 | `CommandProcessor.hpp/cpp` | Thin façade: tries `match_local` first, falls back to `ChatClient::ask`. Exposes `process_async` for off-loop chat calls. |
 | `OpenAiChatContent.hpp/cpp` | `nlohmann::json` extractor that pulls `choices[0].message.content` out of responses regardless of which OpenAI-compat host produced them. |
@@ -43,6 +43,13 @@ RetryingHttpClient
   `voice_detector` still links and runs, just without external AI.
 - `LocalIntentMatcher` intentionally owns `thread_local` compiled regex
   objects so the hot path never re-compiles.
+- The order of dispatch matters: `abort` is checked before `music_cancel`
+  so a bare "stop" cuts the assistant off mid-reply (`AbortReply`)
+  instead of being swallowed by the music branch (which only matches
+  "stop music"). The `wake` pattern is consulted even while
+  `ListenerMode::Asleep` so the user can address the assistant again.
+- See [`../../UX_FLOW.md`](../../UX_FLOW.md) for the full intent-to-UX
+  mapping including earcons, ducking, and confirm-cancel.
 
 See [`../../ARCHITECTURE.md#commandprocessor`](../../ARCHITECTURE.md#commandprocessor)
 for the full routing diagram.

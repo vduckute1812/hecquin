@@ -65,6 +65,14 @@ public:
     /** Best-effort counterpart to `pause()`. */
     void resume();
 
+    /** Persistent user-volume nudge ("a little louder"); forwarded to
+     *  `provider_.step_volume()`.  No-op if nothing is playing. */
+    void step_volume(float delta);
+
+    /** Skip to the next track.  Single-track providers fall back to
+     *  `abort()` (which gracefully tears down the worker thread). */
+    void skip();
+
     /** True between `handle()` returning a successful playback action
      *  and the background thread observing `provider_.play()` return. */
     bool is_playing() const { return playing_.load(); }

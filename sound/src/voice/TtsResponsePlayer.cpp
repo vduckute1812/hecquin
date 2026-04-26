@@ -77,6 +77,10 @@ namespace {
  * the per-frame VAD raises its thresholds (so the assistant's own
  * speaker bleed doesn't trip the barge-in detector) and resets it on
  * scope exit, even on exception or early return.  Null-safe.
+ *
+ * Also asks the barge controller to duck any in-flight music so the
+ * spoken reply isn't drowned out — confirmation lines played over a
+ * song no longer require the user to lean in.
  */
 class TtsActiveGuard {
 public:
@@ -84,11 +88,17 @@ public:
                    AudioBargeInController* barge)
         : collector_(collector), barge_(barge) {
         if (collector_) collector_->set_tts_active(true);
-        if (barge_)     barge_->set_tts_active(true);
+        if (barge_) {
+            barge_->set_tts_active(true);
+            barge_->tts_speak_begin(/*duck_gain=*/0.20f, /*ramp_ms=*/80);
+        }
     }
     ~TtsActiveGuard() {
         if (collector_) collector_->set_tts_active(false);
-        if (barge_)     barge_->set_tts_active(false);
+        if (barge_) {
+            barge_->tts_speak_end(/*ramp_ms=*/200);
+            barge_->set_tts_active(false);
+        }
     }
     TtsActiveGuard(const TtsActiveGuard&) = delete;
     TtsActiveGuard& operator=(const TtsActiveGuard&) = delete;
@@ -120,6 +130,10 @@ void TtsResponsePlayer::speak(const Action& action, const char* mode_label) {
 
 void TtsResponsePlayer::speak_with_muted_mic_(const std::string& text,
                                               const Action& action) {
+    // Even on the legacy mute-mic path we still flip the TtsActiveGuard
+    // so concurrent music gets ducked while the assistant speaks; the
+    // collector / abort wiring inside the guard is null-safe and cheap.
+    TtsActiveGuard guard(collector_, barge_);
     AudioCapture::MuteGuard mute(capture_);
     if (!piper_speak_and_play_streaming(text, piper_model_path_)) {
         std::cerr << "🔇 TTS failed; reply text: " << action.reply << std::endl;

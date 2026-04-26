@@ -139,6 +139,40 @@ bool LearningStore::run_migrations_() {
     if (!exec_("CREATE INDEX IF NOT EXISTS idx_pipeline_events_event_ts "
                "ON pipeline_events(event, ts);")) return false;
 
+    // --- v3 (Tier-4 #16): per-user namespacing.  Adding a table is
+    // backwards-compatible — existing rows in `interactions` /
+    // `pronunciation_attempts` / `phoneme_mastery` simply have a NULL
+    // user_id, which queries treat as "default user".
+    if (!exec_("CREATE TABLE IF NOT EXISTS users ("
+               "  id INTEGER PRIMARY KEY AUTOINCREMENT,"
+               "  display_name TEXT NOT NULL UNIQUE,"
+               "  voice_embedding_blob BLOB,"
+               "  created_at INTEGER NOT NULL"
+               ");")) return false;
+
+    // ALTER TABLE ADD COLUMN is safe on existing data — new column is
+    // NULL for legacy rows.  We swallow the "duplicate column name"
+    // error so re-running on an already-migrated DB is idempotent.
+    auto add_user_column = [this](const char* table) {
+        std::ostringstream sql;
+        sql << "ALTER TABLE " << table << " ADD COLUMN user_id INTEGER REFERENCES users(id);";
+        // SQLite has no IF NOT EXISTS for ADD COLUMN; we tolerate the
+        // failure that arises on the second run by inspecting
+        // PRAGMA table_info first via a quick SELECT.
+        std::ostringstream check;
+        check << "SELECT 1 FROM pragma_table_info('" << table
+              << "') WHERE name='user_id' LIMIT 1;";
+        sqlite3_stmt* stmt = nullptr;
+        if (sqlite3_prepare_v2(db_, check.str().c_str(), -1, &stmt, nullptr) == SQLITE_OK) {
+            const int rc = sqlite3_step(stmt);
+            sqlite3_finalize(stmt);
+            if (rc == SQLITE_ROW) return true; // already there
+        }
+        return exec_(sql.str().c_str());
+    };
+    if (!add_user_column("interactions"))            return false;
+    if (!add_user_column("pronunciation_attempts"))  return false;
+
     if (has_vec0_) {
         std::ostringstream sql;
         sql << "CREATE VIRTUAL TABLE IF NOT EXISTS vec_documents USING vec0("

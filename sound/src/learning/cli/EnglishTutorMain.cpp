@@ -62,6 +62,7 @@ int main() {
                            app.voice().running(), app.piper_model_path(), vcfg);
     app.wire_pipeline_sink(listener);
     app.wire_drill_callbacks(listener);
+    app.wire_user_identification(listener);
     listener.setTutorCallback([&tutor](const Utterance& u) {
         return tutor.process(u.transcript);
     });
@@ -76,6 +77,8 @@ int main() {
     std::cout << "[english_tutor] Lesson mode enabled — say 'exit lesson' to stop learning,\n"
               << "                or 'begin pronunciation' to enter the drill."
               << std::endl;
+    app.voice().speak_capability_summary();
+    app.speak_welcome_back();
     listener.run();
 
     app.shutdown();

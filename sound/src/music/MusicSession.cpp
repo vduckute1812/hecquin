@@ -74,6 +74,26 @@ void MusicSession::resume() {
     }
 }
 
+void MusicSession::step_volume(float delta) {
+    if (playing_.load(std::memory_order_acquire)) {
+        // 80 ms cross-fade matches the duck/un-duck ramp used by the
+        // barge-in controller — keeps the UX consistent.
+        provider_.step_volume(delta, /*ramp_ms=*/80);
+    }
+}
+
+void MusicSession::skip() {
+    // The default provider implementation falls back to `stop()`,
+    // which interrupts `play()` and lets the background worker exit.
+    // Joining the worker (so a subsequent `handle()` doesn't double up)
+    // is `abort()`'s job; do that here as well so the listener can
+    // immediately route a new search prompt.
+    if (playing_.load(std::memory_order_acquire)) {
+        provider_.skip();
+        abort();
+    }
+}
+
 void MusicSession::abort_locked_() {
     if (playback_thread_.joinable()) {
         // `provider_.stop()` is idempotent and safe to call from a

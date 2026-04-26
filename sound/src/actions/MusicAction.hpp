@@ -76,4 +76,28 @@ struct MusicAction {
         a.transcript = std::move(transcript);
         return a;
     }
+
+    [[nodiscard]] static Action volume_up(std::string transcript) {
+        Action a;
+        a.kind = ActionKind::MusicVolumeUp;
+        a.reply = "Louder.";
+        a.transcript = std::move(transcript);
+        return a;
+    }
+
+    [[nodiscard]] static Action volume_down(std::string transcript) {
+        Action a;
+        a.kind = ActionKind::MusicVolumeDown;
+        a.reply = "Quieter.";
+        a.transcript = std::move(transcript);
+        return a;
+    }
+
+    [[nodiscard]] static Action skip(std::string transcript) {
+        Action a;
+        a.kind = ActionKind::MusicSkip;
+        a.reply = "Skipping.";
+        a.transcript = std::move(transcript);
+        return a;
+    }
 };

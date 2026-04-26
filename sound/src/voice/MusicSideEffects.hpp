@@ -1,5 +1,6 @@
 #pragma once
 
+#include <chrono>
 #include <functional>
 #include <utility>
 
@@ -29,12 +30,20 @@ public:
     using AbortCallback  = std::function<void()>;
     using PauseCallback  = std::function<void()>;
     using ResumeCallback = std::function<void()>;
+    /** Apply a relative volume nudge: positive = louder, negative =
+     *  quieter, magnitude is implementation-defined (default
+     *  ±0.2 linear).  Providers that don't honour gain treat as no-op. */
+    using VolumeStepCallback = std::function<void(int delta_steps)>;
+    /** Skip the current track.  No-op for providers without a queue. */
+    using SkipCallback = std::function<void()>;
 
     MusicSideEffects() = default;
 
     void set_abort_callback(AbortCallback cb)   { abort_cb_  = std::move(cb); }
     void set_pause_callback(PauseCallback cb)   { pause_cb_  = std::move(cb); }
     void set_resume_callback(ResumeCallback cb) { resume_cb_ = std::move(cb); }
+    void set_volume_step_callback(VolumeStepCallback cb) { volume_cb_ = std::move(cb); }
+    void set_skip_callback(SkipCallback cb)     { skip_cb_   = std::move(cb); }
     void set_collector(UtteranceCollector* c)   { collector_ = c; }
     /**
      * Attach the listener's barge-in controller.  When set, the
@@ -74,6 +83,47 @@ public:
     void on_pause();
     /** Resume: forward to provider, re-engage the bleed gate. */
     void on_resume();
+    /** Forward a relative volume nudge to the provider. */
+    void on_volume_up();
+    void on_volume_down();
+    /** Forward a skip request to the provider. */
+    void on_skip();
+
+    /**
+     * Called by `TtsResponsePlayer::TtsActiveGuard::ctor` so the music
+     * gain ramps down to a pre-configured ducked level while the
+     * assistant speaks.  Idempotent: a second call while already
+     * speaking is a no-op.  Restored on `on_tts_speak_end()`.
+     */
+    void on_tts_speak_begin();
+    void on_tts_speak_end();
+
+    /** Configurable ducked-gain target used while TTS speaks over music.
+     *  0 = silent, 1 = unattenuated.  Default 0.20 (~-14 dB). */
+    void set_tts_duck_gain(float linear, int ramp_ms);
+
+    /**
+     * Tier-3 #12: opt-in confirm before destroying playback.  When on,
+     * the *first* `on_cancel()` call within `confirm_window` ducks the
+     * music to `confirm_duck_gain` and arms a confirmation window;
+     * a second `on_cancel()` (or any explicit yes/stop intent the
+     * caller forwards) inside the window proceeds with the abort.
+     * Outside the window, the duck is un-armed on the next call.
+     *
+     * Disabled by default — preserves the existing snappy behaviour.
+     */
+    void set_confirm_cancel(bool on,
+                            std::chrono::milliseconds window =
+                                std::chrono::milliseconds(1200),
+                            float confirm_duck_gain = 0.30f);
+
+    /** Apply `HECQUIN_CONFIRM_CANCEL=1`.  Honoured the moment it's set. */
+    void apply_env_overrides();
+
+    /** Hook the listener can use to amend the spoken reply when a
+     *  confirm is pending — returns true to indicate the cancel was
+     *  swallowed (i.e. asking for confirmation, not aborting yet). */
+    bool cancel_is_pending_confirm() const { return confirm_pending_; }
 
 private:
     /**
@@ -87,8 +137,22 @@ private:
     AbortCallback  abort_cb_;
     PauseCallback  pause_cb_;
     ResumeCallback resume_cb_;
+    VolumeStepCallback volume_cb_;
+    SkipCallback   skip_cb_;
     UtteranceCollector* collector_ = nullptr;
     AudioBargeInController* barge_ = nullptr;
+
+    /// While TTS is speaking we hold the music gain at this target so
+    /// confirmations don't fight Piper.  Restored to 1.0 on speak-end.
+    float tts_duck_gain_ = 0.20f;
+    int   tts_duck_ramp_ms_ = 80;
+    bool  tts_speaking_ = false;
+
+    bool  confirm_enabled_ = false;
+    std::chrono::milliseconds confirm_window_{1200};
+    float confirm_duck_gain_ = 0.30f;
+    bool  confirm_pending_ = false;
+    std::chrono::steady_clock::time_point confirm_armed_at_{};
 };
 
 } // namespace hecquin::voice

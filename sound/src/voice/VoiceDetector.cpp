@@ -27,6 +27,9 @@ int main() {
 
     auto music = hecquin::voice::install_music_wiring(listener, app.config().music);
 
+    // Tier-3 #11: announce any missing capabilities before listening.
+    app.speak_capability_summary();
+
     listener.run();
 
     app.shutdown();

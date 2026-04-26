@@ -64,6 +64,45 @@ const ActionSideEffectDescriptor& lookup(ActionKind kind) {
                 &MusicSideEffects::on_resume, false};
             return d;
         }
+        case ActionKind::MusicVolumeUp: {
+            static const ActionSideEffectDescriptor d{
+                MC::None, ListenerMode::Assistant,
+                &MusicSideEffects::on_volume_up, false};
+            return d;
+        }
+        case ActionKind::MusicVolumeDown: {
+            static const ActionSideEffectDescriptor d{
+                MC::None, ListenerMode::Assistant,
+                &MusicSideEffects::on_volume_down, false};
+            return d;
+        }
+        case ActionKind::MusicSkip: {
+            static const ActionSideEffectDescriptor d{
+                MC::None, ListenerMode::Assistant,
+                &MusicSideEffects::on_skip, false};
+            return d;
+        }
+        case ActionKind::AbortReply: {
+            // No mode change; the universal stop interrupts whatever
+            // the assistant is doing in-place.  The listener
+            // additionally fires `barge_.abort_tts_now()` and plays an
+            // earcon for immediate auditory acknowledgement.
+            static const ActionSideEffectDescriptor d{
+                MC::None, ListenerMode::Assistant, nullptr, false, true};
+            return d;
+        }
+        case ActionKind::Sleep: {
+            static const ActionSideEffectDescriptor d{
+                MC::Enter, ListenerMode::Asleep, nullptr, false, false};
+            return d;
+        }
+        case ActionKind::Wake: {
+            // Drop back to home; the listener resolves Asleep→home so
+            // sleep on top of an already-asleep listener still wakes.
+            static const ActionSideEffectDescriptor d{
+                MC::ExitHome, ListenerMode::Asleep, nullptr, false, false};
+            return d;
+        }
         default:
             return kNoop;
     }

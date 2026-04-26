@@ -5,6 +5,7 @@
 #include "actions/GrammarCorrectionAction.hpp"
 #include "actions/MusicAction.hpp"
 #include "actions/PronunciationFeedbackAction.hpp"
+#include "actions/SystemAction.hpp"
 #include "actions/TopicSearchAction.hpp"
 #include "common/StringUtils.hpp"
 
@@ -79,10 +80,19 @@ struct Compiled {
     std::regex music_cancel;
     std::regex music_pause;
     std::regex music_resume;
+    std::regex music_volume_up;
+    std::regex music_volume_down;
+    std::regex music_skip;
     std::regex lesson_start;
     std::regex lesson_end;
     std::regex drill_start;
     std::regex drill_end;
+    std::regex drill_advance;
+    std::regex abort_intent;
+    std::regex help_intent;
+    std::regex sleep_intent;
+    std::regex wake_intent;
+    std::regex identify_user;
 };
 
 Compiled compile(const LocalIntentMatcherConfig& cfg) {
@@ -97,10 +107,19 @@ Compiled compile(const LocalIntentMatcherConfig& cfg) {
         make(cfg.music_cancel_pattern),
         make(cfg.music_pause_pattern),
         make(cfg.music_resume_pattern),
+        make(cfg.music_volume_up_pattern),
+        make(cfg.music_volume_down_pattern),
+        make(cfg.music_skip_pattern),
         make(cfg.lesson_start_pattern),
         make(cfg.lesson_end_pattern),
         make(cfg.drill_start_pattern),
         make(cfg.drill_end_pattern),
+        make(cfg.drill_advance_pattern),
+        make(cfg.abort_pattern),
+        make(cfg.help_pattern),
+        make(cfg.sleep_pattern),
+        make(cfg.wake_pattern),
+        make(cfg.identify_user_pattern),
     };
 }
 
@@ -189,12 +208,78 @@ const std::array<SimpleRule, 5> kSimpleRules = {{
 
 } // namespace
 
+namespace {
+
+// System intents that take the trimmed transcript only.  Abort / sleep /
+// wake never carry mode-aware payloads at the matcher layer — the
+// listener can amend the reply when applying side effects.  Help is
+// handled separately so the listener can swap in the per-mode reply.
+struct SystemRule {
+    const std::regex Compiled::* pattern;
+    Action (*build)(std::string trimmed);
+};
+
+const std::array<SystemRule, 3> kSystemRules = {{
+    {&Compiled::abort_intent, &SystemAction::abort},
+    {&Compiled::sleep_intent, &SystemAction::sleep},
+    {&Compiled::wake_intent,  &SystemAction::wake},
+}};
+
+const char* kDefaultHelpReply =
+    "Try things like: open music, start lesson, start drill, "
+    "tell me a story, turn on the air, or just ask me a question. "
+    "Say stop to interrupt me.";
+
+} // namespace
+
 std::optional<Action> LocalIntentMatcher::match(const std::string& transcript) const {
     const std::string trimmed = trim_copy(transcript);
     const std::string normalized = to_lower_copy(trimmed);
     if (normalized.empty()) return std::nullopt;
 
     const Compiled& p = cached_compile(cfg_);
+
+    // System intents run first so a generic "stop" / "go to sleep" /
+    // "wake up" cannot be shadowed by lesson / drill toggles.  Their
+    // regexes are tightly anchored so they never collide with phrases
+    // like "stop music" or "stop lesson".
+    for (const auto& rule : kSystemRules) {
+        if (std::regex_search(normalized, p.*rule.pattern)) {
+            return rule.build(trimmed);
+        }
+    }
+
+    // Drill-advance pacing intent.  Anchored to the whole utterance so
+    // bare "next" / "skip" / "again" / "continue" only fires when the
+    // user really meant it; embedded in a longer command (e.g. "skip
+    // this song") goes elsewhere.  Mode-gating happens in the listener
+    // — emitting the action unconditionally keeps the matcher simple.
+    if (std::regex_search(normalized, p.drill_advance)) {
+        Action a;
+        a.kind = ActionKind::DrillAdvance;
+        a.transcript = trimmed;
+        return a;
+    }
+
+    // Help — emits a default reply; the listener swaps in a mode-aware
+    // template before TTS speaks it.
+    if (std::regex_search(normalized, p.help_intent)) {
+        return SystemAction::help(kDefaultHelpReply, trimmed);
+    }
+
+    // "I'm Liam" / "this is Mia" — user identification.  Captured group
+    // is the trailing name (lower-cased + trimmed); empty group falls
+    // through to the generic "Got it." reply.
+    {
+        std::smatch m;
+        if (std::regex_search(normalized, m, p.identify_user)) {
+            std::string name;
+            if (m.size() > 1) {
+                name = trim_copy(std::string(m[1].first, m[1].second));
+            }
+            return SystemAction::identify(std::move(name), trimmed);
+        }
+    }
 
     // Lesson + drill toggles fire before any parametric branch; their
     // patterns are highly specific and cannot be confused with the
@@ -227,17 +312,20 @@ std::optional<Action> LocalIntentMatcher::match(const std::string& transcript) c
         }
     }
 
-    // Cancel / pause / resume must fire ahead of the "open music" pattern
-    // so phrasings like "stop music" can't be mis-routed as a reopen by a
-    // future looser `music_pattern`.  Each builds a different factory, so
-    // they sit in a parallel array rather than the simple-action table.
+    // Cancel / pause / resume / volume / skip must fire ahead of the
+    // "open music" pattern so phrasings like "stop music" / "louder"
+    // can't be mis-routed.  Each builds a different factory, so they
+    // sit in a parallel array rather than the simple-action table.
     using MusicFactory = Action (*)(std::string);
     struct MusicRule { const std::regex Compiled::* pattern; MusicFactory build; };
-    static const std::array<MusicRule, 4> kMusicRules = {{
-        {&Compiled::music_cancel, &MusicAction::cancel},
-        {&Compiled::music_pause,  &MusicAction::pause},
-        {&Compiled::music_resume, &MusicAction::resume},
-        {&Compiled::music,        &MusicAction::prompt},
+    static const std::array<MusicRule, 7> kMusicRules = {{
+        {&Compiled::music_cancel,      &MusicAction::cancel},
+        {&Compiled::music_pause,       &MusicAction::pause},
+        {&Compiled::music_resume,      &MusicAction::resume},
+        {&Compiled::music_volume_up,   &MusicAction::volume_up},
+        {&Compiled::music_volume_down, &MusicAction::volume_down},
+        {&Compiled::music_skip,        &MusicAction::skip},
+        {&Compiled::music,             &MusicAction::prompt},
     }};
     for (const auto& rule : kMusicRules) {
         if (std::regex_search(normalized, p.*rule.pattern)) {

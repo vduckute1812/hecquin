@@ -56,6 +56,8 @@ public:
     void pause() override;
     void resume() override;
     void set_gain_target(float linear, int ramp_ms) override;
+    void step_volume(float delta, int ramp_ms) override;
+    void skip() override;
 
     const YouTubeMusicConfig& config() const { return cfg_; }
 
@@ -69,6 +71,9 @@ private:
     std::atomic<int> child_pid_{0};
     std::atomic<bool> aborted_{false};
     std::unique_ptr<yt::YtPlaybackPipeline> pipeline_;
+    /// Persistent user-volume target (separate from transient ducks
+    /// applied by the barge-in controller).  Wraps `[0, 1.5]`.
+    std::atomic<float> user_volume_{1.0f};
 };
 
 } // namespace hecquin::music

@@ -87,4 +87,22 @@ void YouTubeMusicProvider::set_gain_target(float linear, int ramp_ms) {
     if (pipeline_) pipeline_->set_gain_target(linear, ramp_ms);
 }
 
+void YouTubeMusicProvider::step_volume(float delta, int ramp_ms) {
+    // Persist the user-chosen gain so subsequent ducks (which call
+    // `set_gain_target` directly) don't permanently overwrite it.
+    // Cap at 1.5 so a runaway "louder" sequence doesn't clip.
+    float current = user_volume_.load(std::memory_order_relaxed);
+    float next = current + delta;
+    if (next < 0.0f) next = 0.0f;
+    if (next > 1.5f) next = 1.5f;
+    user_volume_.store(next, std::memory_order_relaxed);
+    if (pipeline_) pipeline_->set_gain_target(next, ramp_ms);
+}
+
+void YouTubeMusicProvider::skip() {
+    // Single-track provider: skip == stop.  A future playlist-aware
+    // back-end can override without touching the listener wiring.
+    stop();
+}
+
 } // namespace hecquin::music

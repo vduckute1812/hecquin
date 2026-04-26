@@ -23,6 +23,14 @@ MusicWiring install_music_wiring(VoiceListener& listener,
     listener.setMusicAbortCallback ([session]() { session->abort();  });
     listener.setMusicPauseCallback ([session]() { session->pause();  });
     listener.setMusicResumeCallback([session]() { session->resume(); });
+    // Volume / skip — single 0.15 step per intent (bigger than a duck,
+    // smaller than a full mute), matching the cap in
+    // `YouTubeMusicProvider::step_volume`.
+    listener.setMusicVolumeStepCallback([session](int delta_steps) {
+        const float step = 0.15f * static_cast<float>(delta_steps);
+        session->step_volume(step);
+    });
+    listener.setMusicSkipCallback([session]() { session->skip(); });
 
     // Hook the barge-in controller's gain sink to the provider so a
     // detected user voice ducks the music.  Captures by raw pointer:

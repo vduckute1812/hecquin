@@ -97,6 +97,11 @@ if (NOT TARGET hecquin_voice_pipeline)
         ${HECQUIN_SOUND_SRC_ROOT}/voice/PipelineTelemetry.cpp
         ${HECQUIN_SOUND_SRC_ROOT}/voice/TtsResponsePlayer.cpp
         ${HECQUIN_SOUND_SRC_ROOT}/voice/UtteranceRouter.cpp
+        ${HECQUIN_SOUND_SRC_ROOT}/voice/Earcons.cpp
+        ${HECQUIN_SOUND_SRC_ROOT}/voice/ModeIndicator.cpp
+        ${HECQUIN_SOUND_SRC_ROOT}/voice/PrewarmService.cpp
+        ${HECQUIN_SOUND_SRC_ROOT}/voice/CapabilityReport.cpp
+        ${HECQUIN_SOUND_SRC_ROOT}/voice/WakeWordGate.cpp
         ${HECQUIN_SOUND_SRC_ROOT}/ai/CommandProcessor.cpp
     )
     target_include_directories(hecquin_voice_pipeline PUBLIC ${HECQUIN_SOUND_SRC_ROOT})

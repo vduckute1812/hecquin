@@ -6,27 +6,8 @@ enum class ActionKind {
     LocalDevice,
     InteractionTopicSearch,
     /**
-     * Music conversation, multi-turn.  The split between
-     * `MusicPlayback` (success) and `MusicNotFound` (search miss) lets
-     * the listener's side-effect handler decide whether to engage the
-     * speaker-bleed gate without sniffing the reply string:
-     *
-     *   1. `MusicSearchPrompt` — user said "open music"; assistant asks for a
-     *      song name and the listener enters `ListenerMode::Music`.
-     *   2. `MusicPlayback`     — the song query was resolved and playback
-     *      is now streaming on the background worker thread.  Listener
-     *      drops back to its home mode and tells the VAD collector to
-     *      stop folding speaker bleed into the noise floor.
-     *   3. `MusicNotFound`     — the provider's search returned nothing
-     *      (or the query was empty).  Same mode-exit as `MusicPlayback`
-     *      but without the noise-floor gate, since no audio is playing.
-     *   4. `MusicCancel`       — user said "stop / cancel / exit / close
-     *      music".  Side-effect handler aborts any in-flight playback.
-     *   5. `MusicPause`        — user said "pause music".  Best-effort: the
-     *      provider may pause the audio device; if unsupported the action is
-     *      acknowledged but playback continues.
-     *   6. `MusicResume`       — user said "continue / resume music".
-     *      Counterpart to `MusicPause`.
+     * Music conversation, multi-turn.  See `MusicAction` factories for
+     * the per-kind choreography.
      */
     MusicSearchPrompt,
     MusicPlayback,
@@ -34,9 +15,54 @@ enum class ActionKind {
     MusicCancel,
     MusicPause,
     MusicResume,
+    /** "louder" / "turn it up" — provider best-effort gain bump. */
+    MusicVolumeUp,
+    /** "quieter" / "turn it down" — provider best-effort gain cut. */
+    MusicVolumeDown,
+    /** "skip" / "next song" — provider may treat as a stop + next pick. */
+    MusicSkip,
     ExternalApi,
     EnglishLesson,
     LessonModeToggle,
     PronunciationFeedback,
     DrillModeToggle,
+    /**
+     * "Next / again / skip / continue" while in `ListenerMode::Drill`.
+     * Used by the ready-gate (`HECQUIN_DRILL_AUTO_ADVANCE=0`) to let the
+     * learner pace each sentence themselves instead of being immediately
+     * pushed to the next attempt after feedback TTS.  Listener responds
+     * by flushing `pending_drill_announce_` on the next loop iteration.
+     */
+    DrillAdvance,
+    /**
+     * "Stop / cancel / never mind / forget it" — universal abort.  Side
+     * effects: fire the in-flight TTS abort fuse and drop any pending
+     * follow-on (drill announce, cooldown filler).  Reply is a 0-byte
+     * earcon so the user gets immediate audio acknowledgement without
+     * a Piper round-trip.
+     */
+    AbortReply,
+    /**
+     * "Help / what can I do / commands" — speaks a mode-aware capability
+     * summary.  Replies are loaded from `<prompts_dir>/help_<mode>.txt`
+     * with a built-in fallback so the assistant always has something to
+     * say even before any prompt files are authored.
+     */
+    Help,
+    /**
+     * "Go to sleep / mute yourself / stop listening" — flips listener
+     * into `ListenerMode::Asleep`.  Only the wake intent (or a hardware
+     * push-to-talk press) routes from there.
+     */
+    Sleep,
+    /**
+     * "Wake up / hello hecquin" — leaves `Asleep` mode back to the
+     * binary's home mode.
+     */
+    Wake,
+    /**
+     * "I'm <name> / this is <name>" — namespace future progress writes
+     * to a specific user row.  Reply confirms the switch.
+     */
+    IdentifyUser,
 };

@@ -31,6 +31,7 @@ int main() {
                            app.voice().running(), app.piper_model_path(), vcfg);
     app.wire_pipeline_sink(listener);
     app.wire_drill_callbacks(listener);
+    app.wire_user_identification(listener);
 
     auto music = hecquin::voice::install_music_wiring(listener, cfg.music);
 
@@ -42,6 +43,8 @@ int main() {
     std::cout << "[pronunciation_drill] Drill mode — say the sentence I just read.\n"
               << "  Say \"exit drill\" to quit."
               << std::endl;
+    app.voice().speak_capability_summary();
+    app.speak_welcome_back();
     listener.run();
 
     app.shutdown();

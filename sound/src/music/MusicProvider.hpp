@@ -65,6 +65,28 @@ public:
     virtual void set_gain_target(float linear, int ramp_ms) {
         (void)linear; (void)ramp_ms;
     }
+
+    /**
+     * Best-effort: nudge the user-perceived volume up or down by a
+     * fixed step.  Implementations are expected to clamp the resulting
+     * gain to a sensible range (`[0, 1.5]` is the convention used by
+     * `YouTubeMusicProvider`).  Default no-op so providers without a
+     * mixer don't have to ceremonially override.
+     *
+     * @param delta  +0.15 for "louder", -0.15 for "quieter" by convention.
+     * @param ramp_ms cross-fade duration to avoid clicks.
+     */
+    virtual void step_volume(float delta, int ramp_ms) {
+        (void)delta; (void)ramp_ms;
+    }
+
+    /**
+     * Best-effort: skip the current track and advance to the next.
+     * For single-track providers this is equivalent to `stop()`; for
+     * playlist-aware providers it should resolve and start the next
+     * track without re-prompting the user.  Default: just stop.
+     */
+    virtual void skip() { stop(); }
 };
 
 } // namespace hecquin::music

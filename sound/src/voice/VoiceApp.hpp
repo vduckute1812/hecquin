@@ -49,6 +49,15 @@ public:
     /** Close the audio device and call SDL_Quit; idempotent. */
     void shutdown();
 
+    /**
+     * Tier-3 #11: probe subsystem readiness (cloud, music, …) and
+     * speak a single boot-time summary line through Piper.  No-op
+     * when everything is ready or `HECQUIN_QUIET_BOOT=1`.  Safe to
+     * call before `VoiceListener::run()` so the user hears the
+     * disclosure before they try to use a missing capability.
+     */
+    void speak_capability_summary();
+
     WhisperEngine&       whisper()       { return *whisper_; }
     AudioCapture&        capture()       { return capture_; }
     AppConfig&           config()        { return config_; }

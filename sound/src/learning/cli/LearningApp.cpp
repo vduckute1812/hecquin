@@ -3,9 +3,12 @@
 #include "learning/ProgressTracker.hpp"
 #include "learning/PronunciationDrillProcessor.hpp"
 #include "learning/store/LearningStore.hpp"
+#include "tts/PiperSpeech.hpp"
 #include "voice/VoiceListener.hpp"
 
+#include <cmath>
 #include <iostream>
+#include <sstream>
 
 namespace hecquin::learning::cli {
 
@@ -109,6 +112,48 @@ hecquin::ai::LocalIntentMatcherConfig LearningApp::matcher_config() const {
     // forcing a VoiceApp change for one call site.
     const AppConfig& cfg = const_cast<LearningApp*>(this)->voice_app_.config();
     return hecquin::ai::LocalIntentMatcherConfig::make_from_learning(cfg.learning);
+}
+
+void LearningApp::wire_user_identification(VoiceListener& listener) {
+    if (!store_open()) return;
+    LearningStore* s = store_.get();
+    listener.setUserIdentifiedCallback([this, s](const std::string& name) {
+        if (auto id = s->upsert_user(name)) {
+            current_user_id_ = id;
+            std::cout << "[learning_app] active user: " << name
+                      << " (id=" << *id << ")" << std::endl;
+        }
+    });
+}
+
+void LearningApp::speak_welcome_back() {
+    if (!store_open()) return;
+    const auto piper = voice_app_.piper_model_path();
+    if (piper.empty()) return;
+
+    // Compose: "Welcome back. Last time you scored 78. Today let's
+    // work on the th sound."  Each clause is omitted when its data is
+    // missing so a fresh DB still says a clean "Welcome back."  rather
+    // than "Welcome back. Last time you scored zero."
+    std::ostringstream out;
+    out << "Welcome back.";
+
+    const auto avg = store_->last_session_pronunciation_score(
+        /*limit=*/10, current_user_id_);
+    if (avg) {
+        const int rounded = static_cast<int>(std::lround(*avg));
+        out << " Last time you scored " << rounded << ".";
+    }
+
+    const auto weakest = store_->weakest_phonemes(/*n=*/1);
+    if (!weakest.empty()) {
+        out << " Today let's work on the " << weakest.front() << " sound.";
+    }
+
+    const std::string line = out.str();
+    if (line.empty()) return;
+    std::cout << "[learning_app] welcome-back: " << line << std::endl;
+    (void)piper_speak_and_play(line, piper);
 }
 
 void LearningApp::shutdown() {

@@ -98,6 +98,24 @@ public:
      *  flip. */
     void on_voice_state_change(bool voice);
 
+    /**
+     * Music-aware TTS coexistence: ramp the music output to
+     * `duck_gain` while the assistant speaks, restore on
+     * `tts_speak_end`.  Independent from the voice-driven duck so the
+     * two paths can compose without thrashing the gain.
+     *
+     * When music is not active, both calls are silent no-ops.
+     */
+    void tts_speak_begin(float duck_gain, int ramp_ms);
+    void tts_speak_end(int ramp_ms);
+
+    /**
+     * Universal-stop helper: fires the TTS abort fuse if a TTS window
+     * is currently open, regardless of voice activity.  Safe to call
+     * outside a TTS window — quietly does nothing.
+     */
+    void abort_tts_now();
+
     /** Driven from the listener's poll loop.  Honours the hold timer
      *  (releases the duck after `hold_ms` of continuous silence) so
      *  the controller doesn't need its own thread. */
@@ -109,6 +127,10 @@ public:
 
     bool tts_barge_in_enabled() const { return cfg_.tts_barge_in_enabled; }
     float tts_threshold_boost() const { return cfg_.tts_threshold_boost; }
+
+    /** Diagnostics / tests: true while a TTS-induced music duck is
+     *  active.  Independent of `ducking()` (voice-driven). */
+    bool tts_ducking() const { return tts_ducking_.load(std::memory_order_acquire); }
 
 private:
     void duck_();
@@ -142,6 +164,9 @@ private:
      *  `set_tts_active(true)` window so a stutter of voice ON/OFF
      *  edges doesn't issue duplicate aborts. */
     bool tts_abort_fired_ = false;
+    /** True between `tts_speak_begin` and `tts_speak_end` while music
+     *  was active; tracks whether we still owe a release ramp. */
+    std::atomic<bool> tts_ducking_{false};
 };
 
 } // namespace hecquin::voice

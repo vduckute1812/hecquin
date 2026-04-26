@@ -1,5 +1,6 @@
 #include "voice/VoiceListener.hpp"
 
+#include "common/EnvParse.hpp"
 #include "voice/ActionSideEffectRegistry.hpp"
 #include "voice/PipelineTelemetry.hpp"
 #include "voice/SecondaryVadGate.hpp"
@@ -8,7 +9,9 @@
 #include "voice/UtteranceRouter.hpp"
 
 #include <chrono>
+#include <condition_variable>
 #include <iostream>
+#include <mutex>
 #include <thread>
 #include <utility>
 
@@ -50,6 +53,22 @@ VoiceListener::VoiceListener(WhisperEngine& whisper,
     telemetry_ = std::make_unique<hecquin::voice::PipelineTelemetry>();
     music_fx_.set_collector(collector_.get());
     music_fx_.set_barge_controller(&barge_);
+
+    // Earcons + WakeWordGate honour env overrides up-front so the
+    // first utterance already obeys `HECQUIN_EARCONS` / `HECQUIN_WAKE_MODE`.
+    earcons_.apply_env_overrides();
+    wake_gate_.apply_env_overrides();
+    music_fx_.apply_env_overrides();
+    // Default mode indicator: tiny mode-tinted earcon on every change.
+    mode_indicator_ = std::make_unique<hecquin::voice::ModeIndicator>(&earcons_);
+    // Drill ready-gate: env override only, default true preserves the
+    // pre-existing snappy auto-advance behaviour.
+    {
+        bool flag = true;
+        if (hecquin::common::env::parse_bool("HECQUIN_DRILL_AUTO_ADVANCE", flag)) {
+            drill_auto_advance_ = flag;
+        }
+    }
 
     // Edge-triggered: collector tells us when frame VAD flips.
     collector_->set_voice_state_callback(
@@ -97,6 +116,7 @@ void VoiceListener::apply_local_intent_side_effects_(const Action& local) {
     };
 
     const auto& d = hecquin::voice::descriptor_for(local.kind);
+    const ListenerMode prev_mode = mode_;
     switch (d.mode_change) {
         case MC::None:           break;
         case MC::Enter:          mode_ = d.mode_value; break;
@@ -104,6 +124,13 @@ void VoiceListener::apply_local_intent_side_effects_(const Action& local) {
         case MC::EnterIfEnable:
             mode_ = local.enable ? d.mode_value
                                  : exit_target(d.mode_value);
+            break;
+        case MC::ExitHome:
+            // Wake / abort-style: always drop straight to home.  If
+            // home is the mode we're "leaving", fall through to
+            // Assistant so the user isn't stuck in a no-op loop.
+            mode_ = home_mode_ == d.mode_value
+                        ? ListenerMode::Assistant : home_mode_;
             break;
     }
 
@@ -114,6 +141,31 @@ void VoiceListener::apply_local_intent_side_effects_(const Action& local) {
 
     if (d.music_hook) {
         (music_fx_.*d.music_hook)();
+    }
+
+    if (d.aborts_tts) {
+        // Universal-stop: interrupt the assistant's reply immediately
+        // so the user doesn't have to wait for Piper to finish what it
+        // started.  Earcons for auditory acknowledgement live on the
+        // listener (see `handle_routed_`).
+        barge_.abort_tts_now();
+        // Drop any pending follow-on so a "stop" mid-drill doesn't
+        // immediately re-announce the next sentence.
+        pending_drill_announce_ = false;
+    }
+
+    if (mode_ != prev_mode && mode_indicator_) {
+        mode_indicator_->notify(mode_);
+    }
+
+    // Tier-4 #16: forward IdentifyUser to the upsert callback so the
+    // learning store can mint / look up the row before any subsequent
+    // progress write happens.  Empty `param` (matcher didn't capture a
+    // name) is silently ignored — the spoken "Got it." reply still goes
+    // out so the user knows the system heard them.
+    if (local.kind == ActionKind::IdentifyUser &&
+        user_identified_cb_ && !local.param.empty()) {
+        user_identified_cb_(local.param);
     }
 }
 
@@ -170,6 +222,7 @@ bool VoiceListener::gate_accepts_(
 
     log_vad_rejection_(gate);
     if (telemetry_) telemetry_->emit_vad_rejection(gate, utt.speech_ms);
+    earcons_.play_async(hecquin::voice::Earcons::Cue::VadRejected);
     capture_.clearBuffer();
     std::this_thread::sleep_for(std::chrono::milliseconds(cfg_.poll_interval_ms));
     return false;
@@ -194,7 +247,16 @@ void VoiceListener::handle_routed_(const Action& action) {
     // intentionally do not gate on `from_local_intent` — the function
     // switches on `kind`.
     apply_local_intent_side_effects_(action);
-    player_->speak(action, current_mode_label_());
+
+    // Confirm-cancel: when the music side-effect arms a confirmation
+    // window instead of aborting, override the spoken reply so the
+    // user knows we're asking before we destroy.
+    Action speak = action;
+    if (action.kind == ActionKind::MusicCancel &&
+        music_fx_.cancel_is_pending_confirm()) {
+        speak.reply = "Stop the music?";
+    }
+    player_->speak(speak, current_mode_label_());
 }
 
 void VoiceListener::maybe_announce_drill_(ActionKind action_kind) {
@@ -205,7 +267,19 @@ void VoiceListener::maybe_announce_drill_(ActionKind action_kind) {
         mode_ == ListenerMode::Drill && drill_announce_cb_) {
         pending_drill_announce_ = true;
     }
-    if (pending_drill_announce_ && drill_announce_cb_) {
+    // Explicit pacing: a `DrillAdvance` intent ("next"/"again"/"skip")
+    // forces the announce flush regardless of the auto-advance flag,
+    // so the user can advance even if they hadn't scored yet.
+    if (action_kind == ActionKind::DrillAdvance &&
+        mode_ == ListenerMode::Drill && drill_announce_cb_) {
+        pending_drill_announce_ = true;
+    }
+    // Ready-gate: when auto-advance is off, only flush on explicit
+    // user pacing (DrillAdvance) — `PronunciationFeedback` alone has
+    // queued the announce but waits for the user's signal.
+    const bool may_flush =
+        drill_auto_advance_ || action_kind == ActionKind::DrillAdvance;
+    if (pending_drill_announce_ && drill_announce_cb_ && may_flush) {
         pending_drill_announce_ = false;
         // The announce callback synthesises + plays the target
         // sentence; the same MuteGuard guards the mic so we don't
@@ -222,11 +296,61 @@ void VoiceListener::process_utterance_(
 
     const std::string transcript = transcribe_and_emit_(utt);
     if (!transcript.empty()) {
-        Utterance utterance{transcript, utt.pcm};
-        const auto routed = router.route(utterance);
-        handle_routed_(routed.action);
-        maybe_announce_drill_(routed.action.kind);
-        std::cout << std::endl;
+        // Wake-word / push-to-talk gate.  In `Always` mode this is a
+        // no-op pass-through; in `WakeWord` mode the gate strips the
+        // wake phrase so the downstream router sees just the command.
+        const auto decision = wake_gate_.decide(transcript);
+
+        if (mode_ == ListenerMode::Asleep) {
+            // While asleep, only the wake gate's verdict matters: any
+            // other transcript is dropped silently (still cheaper than
+            // running the LLM and saying "I'm sleeping").
+            if (decision.route) {
+                // Construct a synthesised wake action so the listener
+                // exits Asleep through the normal side-effect path.
+                Action wake_action;
+                wake_action.kind = ActionKind::Wake;
+                wake_action.reply = "I'm here.";
+                wake_action.transcript = decision.transcript;
+                handle_routed_(wake_action);
+            } else {
+                std::cout << "😴 (sleeping; ignored)\n" << std::endl;
+            }
+        } else if (!decision.route) {
+            std::cout << "🤫 (no wake phrase; ignored)\n" << std::endl;
+        } else {
+            Utterance utterance{decision.transcript, utt.pcm};
+
+            // Latency-masking thinking earcon: scheduled at +800 ms so
+            // a fast local-intent / cached-answer route never plays it,
+            // but a slow LLM round-trip (Gemini Flash-Lite tail
+            // latency, retries) gets a soft "still working" pulse.
+            // Cancelled the moment `route()` returns.
+            std::mutex tm_mu;
+            std::condition_variable tm_cv;
+            bool tm_done = false;
+            std::thread thinking_timer([&] {
+                std::unique_lock<std::mutex> lk(tm_mu);
+                if (!tm_cv.wait_for(lk, std::chrono::milliseconds(800),
+                                    [&] { return tm_done; })) {
+                    earcons_.start_thinking();
+                }
+            });
+
+            const auto routed = router.route(utterance);
+
+            {
+                std::lock_guard<std::mutex> lk(tm_mu);
+                tm_done = true;
+            }
+            tm_cv.notify_all();
+            thinking_timer.join();
+            earcons_.stop_thinking();
+
+            handle_routed_(routed.action);
+            maybe_announce_drill_(routed.action.kind);
+            std::cout << std::endl;
+        }
     }
 
     capture_.clearBuffer();

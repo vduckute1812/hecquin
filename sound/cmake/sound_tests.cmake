@@ -230,10 +230,19 @@ target_link_libraries(hecquin_sound_test_ingest_chunking_strategy PRIVATE
     hecquin_learning)
 
 # Ingest content fingerprint determinism.
+#
+# `content_fingerprint()` is a self-contained FNV-1a 64-bit hasher with no
+# dependency on the rest of `hecquin_learning` (no SQLite, no libcurl, no JSON,
+# etc.).  Linking the full `hecquin_learning` archive transitively pulls
+# `libcurl.4.dylib` into the resulting Mach-O via `hecquin_ai`, and macOS
+# AMFI/Gatekeeper has been observed to SIGKILL the resulting (very small)
+# ad-hoc-signed binary on launch — reproducible bisect on the link line shows
+# the kill triggers as soon as `LC_LOAD_DYLIB libcurl` lands in the header.
+# Compile the one TU directly so the test stays an honest unit-test of the
+# hasher and skirts the AMFI quirk entirely.
 hecquin_add_unit_test(hecquin_sound_test_content_fingerprint
-    ${HECQUIN_SOUND_TEST_SRC_ROOT}/learning/ingest/test_content_fingerprint.cpp)
-target_link_libraries(hecquin_sound_test_content_fingerprint PRIVATE
-    hecquin_learning)
+    ${HECQUIN_SOUND_TEST_SRC_ROOT}/learning/ingest/test_content_fingerprint.cpp
+    ${HECQUIN_SOUND_SRC_ROOT}/learning/ingest/ContentFingerprint.cpp)
 
 # ----- learning/pronunciation/ -----------------------------------------------
 

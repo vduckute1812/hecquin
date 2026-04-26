@@ -145,4 +145,60 @@ std::vector<std::string> LearningStore::weakest_phonemes(int n, int min_attempts
 #endif
 }
 
+std::optional<int64_t>
+LearningStore::upsert_user(const std::string& display_name) {
+#ifndef HECQUIN_WITH_SQLITE
+    (void)display_name;
+    return std::nullopt;
+#else
+    if (!db_ || !stmt_cache_ || display_name.empty()) return std::nullopt;
+    using learning::detail::now_epoch_seconds;
+    {
+        auto q = stmt_cache_->acquire("users.upsert",
+            "INSERT INTO users (display_name, created_at) VALUES (?, ?) "
+            "ON CONFLICT(display_name) DO NOTHING;");
+        if (!q) return std::nullopt;
+        sqlite3_bind_text(q.get(), 1, display_name.c_str(), -1, SQLITE_TRANSIENT);
+        sqlite3_bind_int64(q.get(), 2, now_epoch_seconds());
+        if (sqlite3_step(q.get()) != SQLITE_DONE) return std::nullopt;
+    }
+    auto q = stmt_cache_->acquire("users.lookup",
+        "SELECT id FROM users WHERE display_name = ? LIMIT 1;");
+    if (!q) return std::nullopt;
+    sqlite3_bind_text(q.get(), 1, display_name.c_str(), -1, SQLITE_TRANSIENT);
+    if (sqlite3_step(q.get()) != SQLITE_ROW) return std::nullopt;
+    return sqlite3_column_int64(q.get(), 0);
+#endif
+}
+
+std::optional<float>
+LearningStore::last_session_pronunciation_score(
+    int limit, std::optional<int64_t> user_id) const {
+#ifndef HECQUIN_WITH_SQLITE
+    (void)limit; (void)user_id;
+    return std::nullopt;
+#else
+    if (!db_ || !stmt_cache_ || limit <= 0) return std::nullopt;
+    const char* sql = user_id
+        ? "SELECT AVG(pron_overall) FROM ("
+          "  SELECT pron_overall FROM pronunciation_attempts "
+          "  WHERE pron_overall IS NOT NULL AND user_id = ? "
+          "  ORDER BY id DESC LIMIT ?)"
+        : "SELECT AVG(pron_overall) FROM ("
+          "  SELECT pron_overall FROM pronunciation_attempts "
+          "  WHERE pron_overall IS NOT NULL "
+          "  ORDER BY id DESC LIMIT ?)";
+    auto q = stmt_cache_->acquire(
+        user_id ? "pron.recent_avg_user" : "pron.recent_avg",
+        sql);
+    if (!q) return std::nullopt;
+    int idx = 1;
+    if (user_id) sqlite3_bind_int64(q.get(), idx++, *user_id);
+    sqlite3_bind_int(q.get(), idx, limit);
+    if (sqlite3_step(q.get()) != SQLITE_ROW) return std::nullopt;
+    if (sqlite3_column_type(q.get(), 0) == SQLITE_NULL) return std::nullopt;
+    return static_cast<float>(sqlite3_column_double(q.get(), 0));
+#endif
+}
+
 } // namespace hecquin::learning

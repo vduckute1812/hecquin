@@ -22,4 +22,11 @@ enum class ListenerMode {
      * lifecycle of `Drill`.
      */
     Music,
+    /**
+     * Sleep mode: the pipeline still captures audio but only the wake
+     * intent (or a configured hardware push-to-talk press) routes a
+     * transcript downstream.  Entered via `ActionKind::Sleep`; left via
+     * `ActionKind::Wake`.
+     */
+    Asleep,
 };

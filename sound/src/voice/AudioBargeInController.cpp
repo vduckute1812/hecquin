@@ -140,4 +140,29 @@ void AudioBargeInController::emit_abort_() {
     if (cb) cb();
 }
 
+void AudioBargeInController::tts_speak_begin(float duck_gain, int ramp_ms) {
+    if (!music_active_.load(std::memory_order_acquire)) return;
+    // Don't stack two ducks.  Voice-driven duck takes priority because
+    // it represents the user actively talking (deeper attenuation /
+    // faster attack); we only push the TTS duck if no voice duck is
+    // currently engaged.
+    if (ducking_.load(std::memory_order_acquire)) return;
+    if (tts_ducking_.exchange(true, std::memory_order_acq_rel)) return;
+    emit_gain_(std::max(0.0f, duck_gain), std::max(0, ramp_ms));
+}
+
+void AudioBargeInController::tts_speak_end(int ramp_ms) {
+    if (!tts_ducking_.exchange(false, std::memory_order_acq_rel)) return;
+    // Restore unity gain unless a voice-driven duck is still active.
+    if (ducking_.load(std::memory_order_acquire)) return;
+    emit_gain_(1.0f, std::max(0, ramp_ms));
+}
+
+void AudioBargeInController::abort_tts_now() {
+    if (!tts_active_.load(std::memory_order_acquire)) return;
+    if (tts_abort_fired_) return;
+    tts_abort_fired_ = true;
+    emit_abort_();
+}
+
 } // namespace hecquin::voice

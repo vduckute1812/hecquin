@@ -1,5 +1,8 @@
 #include "voice/VoiceApp.hpp"
 
+#include "tts/PiperSpeech.hpp"
+#include "voice/CapabilityReport.hpp"
+
 #include <SDL.h>
 
 #include <atomic>
@@ -62,6 +65,17 @@ bool VoiceApp::init() {
     }
     audio_opened_ = true;
     return true;
+}
+
+void VoiceApp::speak_capability_summary() {
+    const auto status = probe_capabilities(config_);
+    const std::string summary = status.spoken_summary();
+    if (summary.empty()) return;
+    std::cout << "[VoiceApp] capability summary: " << summary << std::endl;
+    if (options_.piper_model_path.empty()) return;
+    // Best-effort: failures land in stderr but never abort startup —
+    // the summary is informational, not load-bearing.
+    (void)piper_speak_and_play(summary, options_.piper_model_path);
 }
 
 void VoiceApp::shutdown() {

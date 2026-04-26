@@ -5,7 +5,9 @@
 > For **setup, CLI usage, configuration keys, and troubleshooting**, see
 > [`README.md`](./README.md).  For **end-to-end call-flow sequence diagrams**
 > (boot, voice turn, TTS barge-in, music streaming + mid-song commands), see
-> [`SEQUENCE_DIAGRAMS.md`](./SEQUENCE_DIAGRAMS.md).
+> [`SEQUENCE_DIAGRAMS.md`](./SEQUENCE_DIAGRAMS.md).  For the **voice-first UX layer**
+> (earcons, wake-word / push-to-talk gate, sleep / wake, mode indicator, confirm-cancel,
+> per-user namespacing, welcome-back recap), see [`UX_FLOW.md`](./UX_FLOW.md).
 
 ## Overview
 
@@ -75,8 +77,11 @@ src/
 │   ├── WhisperPostFilter.hpp/cpp — pure transcript gates (annotation strip, min-alnum, no-speech) — extracted from `WhisperEngine`
 │   ├── ListenerMode.hpp          — `ListenerMode { Assistant, Lesson, Drill, Music }` enum (own header to break cycles)
 │   ├── VoiceListener.hpp/cpp     — thin coordinator: poll loop + mode state machine
-│   ├── ActionSideEffectRegistry.hpp/cpp — data-driven `ActionKind → {ModeChange, music_hook}` table; replaces the old switch in `VoiceListener::apply_local_intent_side_effects_`
-│   ├── MusicSideEffects.hpp/cpp  — listener-side music-mode toggles + speaker-bleed gate
+│   ├── ActionSideEffectRegistry.hpp/cpp — data-driven `ActionKind → {ModeChange, music_hook, aborts_tts}` table; replaces the old switch in `VoiceListener::apply_local_intent_side_effects_` (rows for Sleep / Wake / AbortReply / volume / skip)
+│   ├── MusicSideEffects.hpp/cpp  — listener-side music-mode toggles + speaker-bleed gate + TTS-duck hooks + opt-in confirm-cancel state machine
+│   ├── Earcons.hpp/cpp           — synthesised tone bank (StartListening / VadRejected / Thinking / Acknowledge / NetworkOffline / Sleep / Wake) + `+800 ms` thinking pulse scheduler
+│   ├── WakeWordGate.hpp/cpp      — Always / WakeWord / Ptt routing decision applied after Whisper but before the router
+│   ├── ModeIndicator.hpp/cpp     — `notify(ListenerMode)` cue on every mode flip; default impl is a mode-tinted earcon, GPIO / LED implementations subclass
 │   ├── MusicWiring.hpp/cpp       — `install_music_wiring(listener, MusicConfig)` builds `MusicProvider` + `MusicSession` + 4 callbacks; replaces the copy that used to live in every voice main
 │   ├── UtteranceCollector.hpp/cpp— primary VAD, collection timers, full-buffer snapshot on close
 │   ├── SecondaryVadGate.hpp/cpp  — pure `evaluate_secondary_gate(...)` (mean-RMS + voiced-ratio)
@@ -162,10 +167,10 @@ src/
 │   │   ├── PitchTracker.hpp/cpp  — YIN F0 contour + per-frame RMS
 │   │   ├── Dtw.hpp/cpp            — `dtw_mean_abs_banded` (banded DTW, rolling rows) — extracted from `IntonationScorer.cpp`
 │   │   └── IntonationScorer.hpp/cpp — semitone DTW + final-direction rule
-│   └── cli/                      — `LearningApp` shared bootstrap + `english_ingest`, `english_tutor`, `pronunciation_drill` entries
+│   └── cli/                      — `LearningApp` shared bootstrap (incl. `wire_user_identification` + `speak_welcome_back`) + `english_ingest`, `english_tutor`, `pronunciation_drill` entries
 │       └── StoreApiSink.hpp/cpp  — `make_store_api_call_sink(LearningStore&)` — shared by `english_ingest` + `english_tutor` mains
 ├── actions/
-│   ├── ActionKind.hpp            — enum: None / LocalDevice / TopicSearch / MusicSearchPrompt / MusicPlayback / MusicNotFound / MusicCancel / MusicPause / MusicResume / ExternalApi / EnglishLesson / GrammarCorrection / LessonModeToggle / PronunciationFeedback / DrillModeToggle
+│   ├── ActionKind.hpp            — enum: None / LocalDevice / TopicSearch / MusicSearchPrompt / MusicPlayback / MusicNotFound / MusicCancel / MusicPause / MusicResume / MusicVolumeUp / MusicVolumeDown / MusicSkip / ExternalApi / EnglishLesson / GrammarCorrection / LessonModeToggle / PronunciationFeedback / DrillModeToggle / DrillAdvance / AbortReply / Help / Sleep / Wake / IdentifyUser
 │   ├── Action.hpp                — {kind, reply, transcript}
 │   ├── DeviceAction.hpp          — power control confirmation text
 │   ├── ExternalApiAction.hpp     — wraps API response
@@ -305,6 +310,49 @@ invariant visible in every call site.
 ---
 
 ## Component Details
+
+### UX layer (Earcons / WakeWordGate / ModeIndicator / MusicSideEffects)
+
+A small set of voice-first UX collaborators sit on the listener so the user
+always knows whether they were heard, what mode they're in, and whether
+the assistant is working on their request.  Each is opt-in via env knob
+and preserves the legacy behaviour by default.  The full reference
+(diagrams, env tables, source layout) lives in [`UX_FLOW.md`](./UX_FLOW.md);
+the high-level wiring is:
+
+- `Earcons` (`src/voice/Earcons.*`) — synthesised tone bank for
+  `StartListening` (rising blip on VAD open), `VadRejected` (soft falling
+  blip on secondary-gate skip), `Thinking` (pulsed at ~0.7 Hz while a
+  slow LLM call is in flight, scheduled at +800 ms so fast routes never
+  hear it), `Acknowledge` (`AbortReply` + mode toggles), `NetworkOffline`
+  (boot + repeated 5xx / timeout), `Sleep` / `Wake`.  `HECQUIN_EARCONS=0`
+  disables the entire system; `HECQUIN_EARCONS_DIR` overrides individual
+  cues with on-disk WAVs.
+
+- `WakeWordGate` (`src/voice/WakeWordGate.*`) — three-mode routing
+  decision applied **after** Whisper but **before** the router.  Modes:
+  `always` (default, legacy behaviour), `wake_word` (transcripts must
+  start with — or arrive within `HECQUIN_WAKE_WINDOW_MS` of — a wake
+  phrase, which is then stripped), `ptt` (hardware GPIO push-to-talk).
+  Selected via `HECQUIN_WAKE_MODE`.
+
+- `ModeIndicator` (`src/voice/ModeIndicator.*`) — fired on every
+  `mode_` change.  Default impl plays a mode-tinted earcon; downstream
+  GPIO / LED implementations swap in via `set_mode_indicator(...)`
+  without touching any call site.
+
+- `MusicSideEffects` (`src/voice/MusicSideEffects.*`) — extended
+  beyond playback / pause / resume to also handle volume / skip
+  forwards (`MusicVolumeUp / Down / Skip`), TTS-ducks-music gain
+  ramps (`on_tts_speak_begin / end` → `AudioBargeInController::tts_speak_*`),
+  and the opt-in two-step cancel confirm (`HECQUIN_CONFIRM_CANCEL=1` +
+  `HECQUIN_CONFIRM_CANCEL_MS`).
+
+The `ListenerMode` enum gained an `Asleep` value for the `Sleep` /
+`Wake` flow; the `ActionSideEffectRegistry` learned an `ExitHome`
+mode-change variant + an `aborts_tts` flag that the listener honours by
+firing `barge.abort_tts_now()` (used by `AbortReply` for universal
+mid-reply stop).
 
 ### AudioCapture
 
@@ -572,15 +620,23 @@ per-utterance shell fork/exec cost on the assistant / tutor reply path.
 | `MusicSearchPrompt` | `open music` regex match | "What music would you like to play?" — enters `ListenerMode::Music` |
 | `MusicPlayback` | `MusicSession` (after yt-dlp resolves the track) | "Now playing …"; restores previous `ListenerMode` and engages the speaker-bleed gate on the VAD collector. Playback runs on a worker thread. |
 | `MusicNotFound` | `MusicSession` (search miss / empty query) | "Sorry, I couldn't find that song." — same mode exit as `MusicPlayback` but the bleed gate stays disengaged since no audio is playing. |
-| `MusicCancel` | `stop / cancel / exit / close / end music` regex | "Okay, stopping music." — aborts the worker thread via `MusicSession::abort()`. |
+| `MusicCancel` | `stop / cancel / exit / close / end music` regex | "Okay, stopping music." — aborts the worker thread via `MusicSession::abort()`.  When `HECQUIN_CONFIRM_CANCEL=1` the first match arms a confirmation window and ducks the song; a second match within the window proceeds with the abort (see [`UX_FLOW.md` §5.5](./UX_FLOW.md#55-music-confirm-cancel-state-machine)). |
 | `MusicPause` | `pause music` regex | "Paused." — best-effort `provider.pause()`. |
 | `MusicResume` | `continue / resume / unpause music` regex | "Resuming." — counterpart to pause. |
+| `MusicVolumeUp` / `MusicVolumeDown` | `louder / quieter / volume up / volume down …` | Best-effort `provider.set_volume_step(±1)`; default `YouTubeMusicProvider` uses SDL gain. |
+| `MusicSkip` | `skip / next song / next track` | Best-effort `provider.skip()`; for queue-less providers behaves as cancel + next pick. |
 | `ExternalApi` | HTTP API call | API assistant reply |
 | `EnglishLesson` | (reserved — lesson-mode cue) | — |
 | `GrammarCorrection` | `EnglishTutorProcessor` (Lesson mode) | "You said … / Better … / Reason …" |
 | `LessonModeToggle` | Lesson start/end regex match | Short confirmation; flips `ListenerMode` |
-| `PronunciationFeedback` | `PronunciationDrillProcessor` | Overall score + weakest word/phoneme + intonation note; next sentence announced after playback |
+| `PronunciationFeedback` | `PronunciationDrillProcessor` | Overall score + weakest word/phoneme + intonation note; next sentence announced after playback (gated by `HECQUIN_DRILL_AUTO_ADVANCE`) |
 | `DrillModeToggle` | Drill start/end regex match | Short confirmation; flips `ListenerMode::Drill` |
+| `DrillAdvance` | `next / again / skip / continue` (whole utterance, drill-mode only) | Flushes `pending_drill_announce_` so the next reference sentence is spoken — used when `HECQUIN_DRILL_AUTO_ADVANCE=0` for self-paced practice. |
+| `AbortReply` | `stop / shut up / never mind / forget it / cancel / abort` (whole utterance) | Universal stop. Fires `barge.abort_tts_now()`, drops any pending follow-on, plays an `Acknowledge` earcon. No spoken reply. |
+| `Help` | `help / what can I do / commands / capabilities` | Mode-aware capability summary loaded from `<prompts_dir>/help_<mode>.txt` (built-in fallback). |
+| `Sleep` | `go to sleep / mute yourself / stop listening / sleep mode` | Enters `ListenerMode::Asleep`. Plays `Earcons::Sleep`. Whisper still runs but only `Wake` (or wake phrase / PTT press) routes downstream. |
+| `Wake` | `wake up / hello hecquin / hi hecquin / hey hecquin` (also routes while Asleep) | Drops back to the binary's home mode. Plays `Earcons::Wake`. |
+| `IdentifyUser` | `I'm <name> / this is <name> / my name is <name> / call me <name>` | Captures `<name>` into `Action::param`; listener forwards to `LearningStore::upsert_user` so subsequent progress writes can be namespaced per user (see [`UX_FLOW.md` §5.8](./UX_FLOW.md#58-user-identification--welcome-back-recap)). |
 
 ---
 
@@ -592,6 +648,9 @@ per-utterance shell fork/exec cost on the assistant / tutor reply path.
 | Main thread | Polls buffer, runs VAD, calls Whisper, runs `CommandProcessor::process` synchronously, drives TTS |
 | Piper persistent subprocess (optional) | Long-lived `piper --stdin` process; consumes text lines, emits WAV on stdout |
 | SDL playback callback | Pulls PCM chunks from the streaming ring during playback |
+| Music worker thread (optional) | `MusicSession` dispatches `provider.play()` here so the listener keeps capturing voice during playback |
+| Thinking-earcon scheduler (per utterance) | Short-lived `std::thread` armed for +800 ms around `UtteranceRouter::route(...)`; cancelled the moment routing returns so fast local-intent / cached-answer paths never play the cue |
+| Earcons async dispatch (per cue) | `play_async` detaches a one-shot thread for cues that must not block the listener (calibration pulse, thinking pulse) |
 
 All shared buffer access is guarded by `std::mutex` + `std::lock_guard`.
 The earlier `std::async` worker that executed one HTTP call per utterance
@@ -779,13 +838,14 @@ which is ~10× cheaper for these short queries.
 | `vec_documents`           | `LearningStoreDocuments.cpp`                                     | `USING vec0(embedding FLOAT[768])` (or BLOB fallback)     |
 | `ingested_files`          | `LearningStoreDocuments.cpp`                                     | `path PRIMARY KEY, hash, ingested_at`                     |
 | `sessions`                | `LearningStoreSessions.cpp`                                      | `id, mode, started_at, ended_at`                          |
-| `interactions`            | `LearningStoreSessions.cpp`                                      | `id, session_id, user_text, corrected_text, grammar_notes, created_at` |
+| `interactions`            | `LearningStoreSessions.cpp`                                      | `id, session_id, user_id` *(v3, nullable)*`, user_text, corrected_text, grammar_notes, created_at` |
 | `vocab_progress`          | `LearningStoreSessions.cpp`                                      | `word PRIMARY KEY, first_seen_at, last_seen_at, seen_count, mastery` |
-| `pronunciation_attempts`  | `LearningStorePronunciation.cpp`                                 | `id, session_id, reference, transcript, pron_overall, intonation_overall, per_phoneme_json, created_at` |
+| `pronunciation_attempts`  | `LearningStorePronunciation.cpp`                                 | `id, session_id, user_id` *(v3, nullable)*`, reference, transcript, pron_overall, intonation_overall, per_phoneme_json, created_at` |
 | `phoneme_mastery`         | `LearningStorePronunciation.cpp`                                 | `ipa PRIMARY KEY, attempts, avg_score, last_seen_at`      |
 | `api_calls` **(v2)**      | `LearningStoreApiCalls.cpp` (via `LoggingHttpClient` sink)       | `id, ts, provider, endpoint, method, status, latency_ms, request_bytes, response_bytes, ok, error` |
 | `request_logs` **(v2)**   | Python `dashboard/` middleware                                   | `id, ts, path, method, status, latency_ms, remote_ip, user_agent` |
 | `pipeline_events` **(v3)**| `LearningStoreApiCalls.cpp` (shared `ApiCallSink` mechanism)     | `id, ts, event, outcome, duration_ms, attrs_json` — VAD gate decisions, Whisper latency + p(no_speech), drill alignment ok/fail, Piper synth ms |
+| `users` **(v3)**          | `LearningStoreMigrations.cpp` (insert via `LearningStorePronunciation::upsert_user`) | `id, display_name UNIQUE, voice_embedding_blob, created_at` — populated when an `IdentifyUser` intent fires; nullable `user_id` columns above resolve to "default user" when no user has been identified. |
 
 Indexes on `api_calls(ts)`, `api_calls(provider, ts)`, `request_logs(ts)`,
 `pipeline_events(ts)`, and `pipeline_events(event, ts)` keep the dashboard's
@@ -794,6 +854,13 @@ per-day aggregations cheap.
 `pipeline_events` is append-only and intentionally schemaless in its
 `attrs_json` payload: a new metric can be added (e.g. `drill_alignment.ok=1,
 segments=42`) without another migration.
+
+The v3 `user_id` columns are added via idempotent
+`ALTER TABLE … ADD COLUMN`s guarded by `pragma_table_info(...)` probes so
+the migration is safe to run on already-migrated databases.  Existing
+rows naturally hold `NULL` and are treated by all queries as belonging
+to the "default user" — single-user rigs keep working without ever
+firing an `IdentifyUser` intent.  See [`UX_FLOW.md` §4.6](./UX_FLOW.md#46-learningstore--per-user-namespacing-schema-v3).
 
 If `sqlite-vec` cannot be downloaded at configure time, `LearningStore` transparently
 falls back to a BLOB-backed table and a C++ brute-force cosine scan — the rest of the

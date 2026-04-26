@@ -7,6 +7,9 @@ A cross-platform audio processing module for the Robot Tutor project, providing 
 > threading model, and CMake internals**, see [`ARCHITECTURE.md`](./ARCHITECTURE.md).
 > For end-to-end **call-flow sequence diagrams** (boot, voice turn, TTS barge-in, music
 > streaming + mid-song commands), see [`SEQUENCE_DIAGRAMS.md`](./SEQUENCE_DIAGRAMS.md).
+> For the **voice-first UX layer** (earcons, wake-word / push-to-talk, sleep / wake intents,
+> mode indicator, music confirm-cancel, per-user namespacing, welcome-back recap),
+> see [`UX_FLOW.md`](./UX_FLOW.md).
 
 ## Overview
 
@@ -219,6 +222,23 @@ The voice detector listens on the default microphone, detects speech activity, t
 | `HECQUIN_WHISPER_SUPPRESS_SEGS`            | `1` to silence per-segment `> …` stdout dumps |
 | `HECQUIN_LOG_LEVEL`                        | `debug` / `info` / `warn` / `error` (default `info`) |
 | `HECQUIN_LOG_FORMAT`                       | `pretty` (default) or `json` (one JSON object per log line) |
+
+**Voice-first UX environment variables** (all optional; defaults preserve the legacy
+behaviour — for the full design, diagrams, and rationale see [`UX_FLOW.md`](./UX_FLOW.md)):
+
+| Variable                          | Default  | Purpose                                                                                  |
+| --------------------------------- | -------- | ---------------------------------------------------------------------------------------- |
+| `HECQUIN_EARCONS`                 | `1`      | `0` disables every earcon (start-listening / VAD-rejected / thinking / acknowledge / sleep / wake / network-offline) |
+| `HECQUIN_EARCONS_DIR`             | unset    | Optional directory of `<name>.wav` overrides (mono int16, 22050 Hz)                      |
+| `HECQUIN_WAKE_MODE`               | `always` | `always` \| `wake_word` \| `ptt`                                                         |
+| `HECQUIN_WAKE_PHRASE`             | `hecquin\|hey hecquin\|hi hecquin\|hello hecquin` | Wake-phrase regex alternation (only used in `wake_word` mode)   |
+| `HECQUIN_WAKE_WINDOW_MS`          | `8000`   | After a wake-phrase detection, follow-on transcripts route for this many ms              |
+| `HECQUIN_DRILL_AUTO_ADVANCE`      | `1`      | `0` waits for an explicit `next` / `again` / `skip` (`DrillAdvance` intent) before announcing the next sentence |
+| `HECQUIN_CONFIRM_CANCEL`          | `0`      | `1` enables the two-step `MusicCancel` confirmation (first cancel ducks + arms, second within window aborts) |
+| `HECQUIN_CONFIRM_CANCEL_MS`       | `1200`   | Confirmation window length                                                               |
+| `HECQUIN_DUCK_GAIN`               | `0.20`   | Music gain target while TTS speaks over a song (linear 0..1)                             |
+| `HECQUIN_DUCK_RAMP_MS`            | `80`     | Linear ramp duration each side of the speak-begin / speak-end boundary                   |
+| `HECQUIN_TTS_BARGE_IN`            | `0`      | `1` enables live-mic barge-in (raised VAD threshold instead of muting the mic during TTS)|
 
 **System prompt:** The AI system prompt is loaded from `.env/prompts/system_prompt.txt` at startup. Edit this file to change the assistant's personality or response style without recompiling. If the file is missing, a built-in default is used.
 

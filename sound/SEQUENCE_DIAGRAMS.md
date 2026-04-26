@@ -7,16 +7,22 @@ re-rendered.
 
 ## Existing diagrams (single source of truth)
 
-| Flow                                   | Location                                                                                          |
-|----------------------------------------|---------------------------------------------------------------------------------------------------|
-| `VoiceListener::run` main loop         | [`src/voice/README.md`](./src/voice/README.md#sequence-diagram--voicelistenerrun-loop)            |
-| `piper_speak_and_play_streaming` (legacy) | [`src/tts/README.md`](./src/tts/README.md#sequence-diagram--piper_speak_and_play_streaming)    |
-| `CommandProcessor::process` (chat fallback) | [`src/ai/README.md`](./src/ai/README.md#sequence-diagram--commandprocessorprocess)            |
-| `EnglishTutorProcessor::process` (RAG) | [`src/learning/README.md`](./src/learning/README.md#sequence-diagram--englishtutorprocessorprocess) |
-| `PronunciationDrillProcessor::score`   | [`src/learning/pronunciation/drill/README.md`](./src/learning/pronunciation/drill/README.md#sequence-diagram--pronunciationdrillprocessorscore) |
-| `ListenerMode` state transitions       | [`src/voice/README.md`](./src/voice/README.md#state-diagram--listenermode)                        |
-| `UtteranceCollector` collect FSM       | [`src/voice/README.md`](./src/voice/README.md#state-diagram--utterancecollector)                  |
-| `StreamingSdlPlayer` playback FSM      | [`src/tts/README.md`](./src/tts/README.md#state-diagram--streamingsdlplayer)                      |
+| Flow                                       | Location                                                                                          |
+|--------------------------------------------|---------------------------------------------------------------------------------------------------|
+| `VoiceListener::run` main loop             | [`src/voice/README.md`](./src/voice/README.md#sequence-diagram--voicelistenerrun-loop)            |
+| `piper_speak_and_play_streaming` (legacy)  | [`src/tts/README.md`](./src/tts/README.md#sequence-diagram--piper_speak_and_play_streaming)       |
+| `CommandProcessor::process` (chat fallback)| [`src/ai/README.md`](./src/ai/README.md#sequence-diagram--commandprocessorprocess)                |
+| `EnglishTutorProcessor::process` (RAG)     | [`src/learning/README.md`](./src/learning/README.md#sequence-diagram--englishtutorprocessorprocess) |
+| `PronunciationDrillProcessor::score`       | [`src/learning/pronunciation/drill/README.md`](./src/learning/pronunciation/drill/README.md#sequence-diagram--pronunciationdrillprocessorscore) |
+| `ListenerMode` state transitions (incl. `Asleep`) | [`UX_FLOW.md` §5.1](./UX_FLOW.md#51-mode-state-machine-with-asleep)                          |
+| Per-utterance UX cue timeline (success / abort)   | [`UX_FLOW.md` §5.2 / §5.3](./UX_FLOW.md#52-per-utterance-ux-cue-timeline-success-path)       |
+| Sleep / Wake cycle                         | [`UX_FLOW.md` §5.4](./UX_FLOW.md#54-sleep--wake-cycle)                                            |
+| Music confirm-cancel state machine         | [`UX_FLOW.md` §5.5](./UX_FLOW.md#55-music-confirm-cancel-state-machine)                           |
+| TTS-ducks-music gain timeline              | [`UX_FLOW.md` §5.6](./UX_FLOW.md#56-tts-ducks-music-gain-timeline)                                |
+| Drill ready-gate (auto-advance off)        | [`UX_FLOW.md` §5.7](./UX_FLOW.md#57-drill-ready-gate-auto-advance-off)                            |
+| User identification + welcome-back recap   | [`UX_FLOW.md` §5.8](./UX_FLOW.md#58-user-identification--welcome-back-recap)                      |
+| `UtteranceCollector` collect FSM           | [`src/voice/README.md`](./src/voice/README.md#state-diagram--utterancecollector)                  |
+| `StreamingSdlPlayer` playback FSM          | [`src/tts/README.md`](./src/tts/README.md#state-diagram--streamingsdlplayer)                      |
 
 The diagrams below cover the **gaps**: boot, cross-cutting voice-turn
 choreography, the live-mic TTS barge-in path, and music streaming with
@@ -64,8 +70,20 @@ sequenceDiagram
         Main->>Lst: setDrillCallback(drill.score) + drill_announce_cb
     end
 
+    opt english_tutor / pronunciation_drill (Tier-4 #16, #17)
+        Main->>Lst: setUserIdentifiedCallback(...)
+        Note over Lst: IdentifyUser → LearningStore::upsert_user
+        Main->>Main: LearningApp::speak_welcome_back()
+        Note right of Main: "Welcome back. Last time you scored 78.<br>Today let's work on the θ sound."
+    end
+
+    opt Tier-3 #11
+        Main->>App: speak_capability_summary()
+        Note right of Main: "Lessons, drills, music, and weather are ready.<br>Voice and chat are online."
+    end
+
     Main->>Lst: run()
-    Note over Lst: enters main loop — see voice/README.md
+    Note over Lst: enters main loop — see voice/README.md<br>(Earcons, WakeWordGate, ModeIndicator wired in ctor)
 ```
 
 ---
@@ -91,7 +109,15 @@ sequenceDiagram
     participant FX as MusicSideEffects + ActionSideEffectRegistry
 
     Note over Lst: utterance already passed VAD + Whisper<br>(see voice/README.md)
+    Lst->>Lst: WakeWordGate.decide(transcript)
+    Note right of Lst: drops while Asleep unless wake intent;<br>strips wake phrase in WakeWord mode
+    alt mode == Asleep && !decision.route
+        Lst-->>Lst: silently drop, play no earcon
+    end
     Lst->>R: route({transcript, pcm})
+    par +800 ms scheduler
+        Lst-->>Lst: Earcons.start_thinking() iff route hasn't returned
+    end
     R->>Loc: match_local(transcript)
 
     alt local intent (mode toggle / device / story / music ctl)
@@ -116,11 +142,21 @@ sequenceDiagram
     R-->>Lst: Result{action, from_local_intent}
 
     Lst->>FX: apply_local_intent_side_effects_(action)
-    Note over FX: ActionSideEffectRegistry mode flip<br>+ MusicSideEffects collector/barge lockstep
+    Note over FX: ActionSideEffectRegistry mode flip<br>(+ ExitHome for Wake, aborts_tts for AbortReply)<br>+ MusicSideEffects collector/barge lockstep
+    Lst-->>Lst: Earcons.stop_thinking()
+    opt mode_ != prev_mode
+        Lst->>Lst: ModeIndicator.notify(mode_)
+        Note right of Lst: short audible cue per mode change<br>(swap to GPIO/LED via set_mode_indicator)
+    end
+    opt action.kind == IdentifyUser
+        Lst->>Lst: user_identified_cb_(action.param)
+        Note right of Lst: LearningApp::wire_user_identification<br>→ LearningStore::upsert_user
+    end
     Lst->>TTS: speak(action, mode_label)
     Note right of TTS: see Diagram 3 for barge-in,<br>tts/README.md for legacy
     opt drill mode and PronunciationFeedback
         Lst->>Drl: drill_announce_cb (next target sentence)
+        Note right of Drl: gated by HECQUIN_DRILL_AUTO_ADVANCE —<br>see UX_FLOW.md §5.7
     end
 ```
 
@@ -239,13 +275,20 @@ sequenceDiagram
                 alt "stop / cancel music"
                     Loc-->>R: MusicCancel
                     Lst->>FX: on_cancel()
-                    FX->>MS: abort()
-                    FX->>Col: set_external_audio_active(false) + reset_noise_floor()
-                    FX->>Barge: set_music_active(false)
-                    MS->>Prov: stop()
-                    Prov->>YT: SIGTERM child pid
-                    Prov-->>-MS: play() returns
-                    MS->>MS: join worker
+                    alt HECQUIN_CONFIRM_CANCEL=1 (Tier-3 #12)
+                        FX->>Barge: tts_speak_begin(confirm_duck_gain, 80)
+                        Note over FX: arm window — see UX_FLOW.md §5.5<br>2nd MusicCancel inside window proceeds
+                        FX-->>Lst: confirm_pending_=true
+                        Lst-->>R: speak override "Stop the music?"
+                    else default (snappy)
+                        FX->>MS: abort()
+                        FX->>Col: set_external_audio_active(false) + reset_noise_floor()
+                        FX->>Barge: set_music_active(false)
+                        MS->>Prov: stop()
+                        Prov->>YT: SIGTERM child pid
+                        Prov-->>-MS: play() returns
+                        MS->>MS: join worker
+                    end
                 else "pause music"
                     Lst->>FX: on_pause()
                     FX->>Prov: pause() (SDL_PauseAudioDevice)
@@ -254,6 +297,18 @@ sequenceDiagram
                     Lst->>FX: on_resume()
                     FX->>Prov: resume()
                     FX->>Col: set_external_audio_active(true)
+                else "louder / quieter / skip" (Tier-2 #9)
+                    Lst->>FX: on_volume_up / on_volume_down / on_skip
+                    FX->>Prov: set_volume_step(±1) / skip()
+                    Note over Player: SDL gain step or queue advance
+                else assistant TTS reply (Tier-1 #3)
+                    Lst->>FX: on_tts_speak_begin()
+                    FX->>Barge: tts_speak_begin(duck_gain, ramp_ms)
+                    Note over Player: music ducks 1.0 → 0.20 over 80 ms<br>(see UX_FLOW.md §5.6)
+                    Lst-->>Lst: speak reply
+                    Lst->>FX: on_tts_speak_end()
+                    FX->>Barge: tts_speak_end(ramp_ms)
+                    Note over Player: music restored 0.20 → 1.0
                 else user speaks over song (barge-in duck)
                     Barge->>Prov: set_gain_target(duck_gain, ramp_ms)
                     Note over Player: linear gain ramp on next callback
@@ -269,9 +324,16 @@ sequenceDiagram
 
 - **(1) Boot** ends at `Lst.run()` — enter the loop in
   [`voice/README.md`](./src/voice/README.md#sequence-diagram--voicelistenerrun-loop).
+  The optional welcome-back recap and capability summary fire just
+  before `run()`; the per-user identification side-channel is detailed
+  in [`UX_FLOW.md` §5.8](./UX_FLOW.md#58-user-identification--welcome-back-recap).
 - The loop's accepted-utterance branch enters **(2)** here.
 - **(2)** dispatches into one of the per-handler diagrams listed in the
-  index, then back into the side-effect lane and **(3)**.
+  index, then back into the side-effect lane and **(3)**.  The wake
+  gate, thinking earcon, and mode-indicator cues are layered into
+  **(2)** above; their state machine is in [`UX_FLOW.md` §5.1–5.4](./UX_FLOW.md#5-diagrams).
 - **(2)** entering Music mode expands into **(4)**.
 - `MusicSideEffects.on_*` calls in **(4)** are the same hooks invoked
-  from `apply_local_intent_side_effects_` in **(2)**.
+  from `apply_local_intent_side_effects_` in **(2)**.  The opt-in
+  confirm-cancel path is detailed in [`UX_FLOW.md` §5.5](./UX_FLOW.md#55-music-confirm-cancel-state-machine);
+  the TTS-ducks-music gain ramp lives in [`UX_FLOW.md` §5.6](./UX_FLOW.md#56-tts-ducks-music-gain-timeline).

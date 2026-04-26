@@ -9,12 +9,12 @@ to `MusicSession::handle` as a song query.
 
 | File | Purpose |
 |---|---|
-| `MusicProvider.hpp` | Interface: `search`, `play` (blocking), `stop`, plus advisory `pause` / `resume` (default no-op). |
+| `MusicProvider.hpp` | Interface: `search`, `play` (blocking), `stop`, plus advisory `pause` / `resume` / `volume_step(delta)` / `skip()` (default no-ops). Volume is provider-relative; `delta = +1 / -1` is a single user-perceptible step. |
 | `YouTubeMusicProvider.hpp/cpp` | Thin orchestrator over `yt/`. Builds the search command via `yt::build_search_command`, parses results with `yt::parse_search_output`, and delegates one playback to `yt::YtPlaybackPipeline`. Optional `HECQUIN_YT_COOKIES_FILE` for YouTube Premium auth. `pause / resume` toggle the SDL device. |
 | `yt/YtDlpCommands.hpp/cpp` | Pure command-string builders (`build_search_command`, `build_playback_command`). No I/O — exercised by `tests/music/test_yt_dlp_commands.cpp`. |
 | `yt/YtDlpSearch.hpp/cpp` | Pure `parse_search_output(stdout) → optional<MusicTrack>`. Handles TAB / `\\t` separators and skips blank preamble lines from `yt-dlp`. Tested by `tests/music/test_yt_dlp_search_parser.cpp`. |
 | `yt/YtPlaybackPipeline.hpp/cpp` | Owns the read loop + `StreamingSdlPlayer` lifecycle for one playback. Builds and manages the `yt-dlp \| ffmpeg` subprocess via `common::Subprocess`. |
-| `MusicSession.hpp/cpp` | Async facade. Searches synchronously, then dispatches `provider.play()` to a private `std::thread`. Exposes `abort / pause / resume` for the mid-song voice intents. The microphone is **not** muted during playback so "stop / pause / continue music" can be heard over the song. The thread-lifecycle plumbing (abort prior song → mark playing → spawn → mark done) is factored out into the private `start_playback_thread_(track)` so `handle()` reads as: log → resolve → either build "not found" reply or `start_playback_thread_(track)` + build "playing" reply. |
+| `MusicSession.hpp/cpp` | Async facade. Searches synchronously, then dispatches `provider.play()` to a private `std::thread`. Exposes `abort / pause / resume / volume_step(delta) / skip()` for the mid-song voice intents. The microphone is **not** muted during playback so "stop / pause / continue / louder / skip" can be heard over the song. The thread-lifecycle plumbing (abort prior song → mark playing → spawn → mark done) is factored out into the private `start_playback_thread_(track)` so `handle()` reads as: log → resolve → either build "not found" reply or `start_playback_thread_(track)` + build "playing" reply. |
 | `MusicFactory.hpp/cpp` | Builds a `MusicProvider` from `AppConfig::music`. Unknown `provider` values fall back to YouTube with a warning. |
 
 Wiring into the `VoiceListener` is centralised in
@@ -48,11 +48,15 @@ and `handle()` returns the "Now playing …" `Action` immediately.  The
 listener drops back to its home mode, the microphone stays live, and
 the `LocalIntentMatcher` fast-path keeps watching for these intents:
 
-| Phrase                                       | `ActionKind`   | Effect |
+| Phrase                                       | `ActionKind`     | Effect |
 |---|---|---|
-| `stop / cancel / exit / close / end music`   | `MusicCancel`  | `MusicSession::abort()` → `provider.stop()` → worker joins. |
-| `pause music`                                | `MusicPause`   | `provider.pause()` (best-effort; SDL device pauses). |
-| `continue / resume / unpause music`          | `MusicResume`  | `provider.resume()` — counterpart of pause. |
+| `stop / cancel / exit / close / end music`   | `MusicCancel`    | `MusicSession::abort()` → `provider.stop()` → worker joins. With `HECQUIN_CONFIRM_CANCEL=1` the **first** cancel only ducks the song + arms a `HECQUIN_CONFIRM_CANCEL_MS` window; only a **second** cancel within the window aborts. |
+| `pause music`                                | `MusicPause`     | `provider.pause()` (best-effort; SDL device pauses). |
+| `continue / resume / unpause music`          | `MusicResume`    | `provider.resume()` — counterpart of pause. |
+| `louder / volume up / turn it up`            | `MusicVolumeUp`  | `provider.volume_step(+1)` — provider-relative single step. |
+| `quieter / softer / volume down / lower volume` | `MusicVolumeDown` | `provider.volume_step(-1)`. |
+| `skip / next song / next track`              | `MusicSkip`      | `provider.skip()` — provider may treat as stop + pick next. |
+| (any other intent while assistant is speaking)| n/a (`AbortReply`) | Listener fires `AudioBargeInController::abort_tts_now()` so the assistant stops mid-reply; music gain restores via `tts_speak_end`. |
 
 Tradeoff: speakers bleed into the mic.  The intent matcher only acts on
 that small phrase set, so stray transcription of song lyrics rarely
@@ -74,11 +78,24 @@ that detects normal speech.  Without this gate, "stop music" would
 correctly abort the song but leave the floor sitting at the music's RMS,
 making the very next sentence inaudible to the VAD.
 
+## TTS-ducks-music
+
+When the assistant needs to speak while a song is streaming (e.g. an
+`EnglishLesson` reply, a `Help` summary, or the welcome-back recap),
+`voice/MusicSideEffects::on_tts_speak_begin/end` proxies into
+`AudioBargeInController::tts_speak_begin/end` to ramp the music gain
+down (`HECQUIN_DUCK_GAIN`) for `HECQUIN_DUCK_RAMP_MS` and back up when
+Piper finishes.  The two ducks (voice-driven barge-in vs. TTS) are
+independent atomic flags so they compose without thrashing the gain.
+See [`../../UX_FLOW.md`](../../UX_FLOW.md) for the timing diagram.
+
 ## Known limitations
 
 - Streaming failures *after* `handle()` returns are silent to the user
   (logged to stderr only).  The "Now playing …" reply has already been
   spoken by then; a failed song just shortens itself.
-- `pause / resume` rely on the provider implementing them.  The default
-  `MusicProvider` interface exposes them as no-ops so future back-ends
-  that can't suspend their pipeline still compile.
+- `pause / resume / volume_step / skip` rely on the provider
+  implementing them.  The default `MusicProvider` interface exposes
+  them as no-ops so future back-ends that can't suspend / re-pick still
+  compile and the UX layer just falls back to a spoken
+  acknowledgement without an audible gain change.

@@ -14,11 +14,11 @@ clean seam.
 |---|---|
 | `LearningStore.hpp` | Public facade (one class). |
 | `LearningStore.cpp` | Lifecycle + metadata (open / close, kv, `StatementCache`). |
-| `LearningStoreMigrations.cpp` | All DDL. Schema v3 — documents, ingested_files, sessions, interactions, vocab, pronunciation_attempts, phoneme_mastery, api_calls, pipeline_events, drill pool, vec0 virtual table. |
+| `LearningStoreMigrations.cpp` | All DDL. Schema v3 — documents, ingested_files, sessions, interactions, vocab, pronunciation_attempts, phoneme_mastery, api_calls, pipeline_events, drill pool, vec0 virtual table, **`users`** (per-speaker namespace), and idempotent `ALTER TABLE ADD COLUMN user_id` on `interactions` + `pronunciation_attempts` so progress writes can attribute to a specific learner without breaking older databases (rows from before identification stay `NULL`). |
 | `LearningStoreDocuments.cpp` | Forwards to [`detail::DocumentsOps`](./detail/README.md). |
 | `LearningStoreVectorSearch.cpp` | Forwards to `detail::VectorSearchOps` (vec0 path + BLOB brute-force fallback). The two SQL paths are split into private helpers `query_top_k_vec0` / `query_top_k_scan` and share a single `map_row_to_retrieved` row mapper, so the row→`RetrievedDocument` decode logic is no longer duplicated. |
 | `LearningStoreSessions.cpp` | Forwards to `detail::SessionsOps`. |
-| `LearningStorePronunciation.cpp` | Forwards to `detail::PronunciationOps`. |
+| `LearningStorePronunciation.cpp` | Forwards to `detail::PronunciationOps`. Also currently hosts the `users` aggregate forwarders — `upsert_user(display_name) → id` (case-insensitive idempotent) and `last_session_pronunciation_score(user_id)` for the `LearningApp::speak_welcome_back()` recap. Will graduate to its own `LearningStoreUsers.cpp` if the aggregate grows beyond two methods. |
 | `LearningStoreApiCalls.cpp` | Forwards to `detail::ApiCallsOps` (writes api_calls + pipeline_events). |
 
 ## Sub-folders

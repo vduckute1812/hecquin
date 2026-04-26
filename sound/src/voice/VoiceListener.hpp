@@ -4,11 +4,14 @@
 #include "ai/CommandProcessor.hpp"
 #include "voice/AudioBargeInController.hpp"
 #include "voice/AudioCapture.hpp"
+#include "voice/Earcons.hpp"
 #include "voice/ListenerMode.hpp"
+#include "voice/ModeIndicator.hpp"
 #include "voice/MusicSideEffects.hpp"
 #include "voice/PipelineEvent.hpp"
 #include "voice/SecondaryVadGate.hpp"
 #include "voice/VoiceListenerConfig.hpp"
+#include "voice/WakeWordGate.hpp"
 #include "voice/WhisperEngine.hpp"
 
 #include <atomic>
@@ -119,6 +122,22 @@ public:
     void setMusicAbortCallback(MusicAbortCallback cb)   { music_fx_.set_abort_callback(std::move(cb)); }
     void setMusicPauseCallback(MusicPauseCallback cb)   { music_fx_.set_pause_callback(std::move(cb)); }
     void setMusicResumeCallback(MusicResumeCallback cb) { music_fx_.set_resume_callback(std::move(cb)); }
+    void setMusicVolumeStepCallback(hecquin::voice::MusicSideEffects::VolumeStepCallback cb) {
+        music_fx_.set_volume_step_callback(std::move(cb));
+    }
+    void setMusicSkipCallback(hecquin::voice::MusicSideEffects::SkipCallback cb) {
+        music_fx_.set_skip_callback(std::move(cb));
+    }
+
+    /// Callback fired whenever an `IdentifyUser` intent is handled.
+    /// `display_name` is the captured (lower-cased, trimmed) name from
+    /// the matcher.  Wired to `LearningStore::upsert_user` by
+    /// `LearningApp::wire_user_identification` so downstream progress
+    /// writes can be namespaced per user.
+    using UserIdentifiedCallback = std::function<void(const std::string&)>;
+    void setUserIdentifiedCallback(UserIdentifiedCallback cb) {
+        user_identified_cb_ = std::move(cb);
+    }
 
     /**
      * Install (or clear) the per-event telemetry sink.
@@ -165,6 +184,19 @@ public:
      * mutates state.
      */
     hecquin::voice::AudioBargeInController& barge_in() { return barge_; }
+
+    /** Access the Earcons collaborator (wiring code may apply env
+     *  overrides + load WAV directories before run()). */
+    hecquin::voice::Earcons& earcons() { return earcons_; }
+
+    /** Access the WakeWordGate so wiring code can flip mode / PTT. */
+    hecquin::voice::WakeWordGate& wake_gate() { return wake_gate_; }
+
+    /** Install (or clear) a custom mode indicator.  Defaults to a
+     *  short audible cue per mode via the internal Earcons. */
+    void set_mode_indicator(std::unique_ptr<hecquin::voice::ModeIndicator> ind) {
+        mode_indicator_ = std::move(ind);
+    }
 
     /** Force-start in a specific mode (used by the dedicated english_tutor / pronunciation_drill binaries). */
     void setInitialMode(ListenerMode mode) { mode_ = mode; }
@@ -219,6 +251,7 @@ private:
     TutorCallback drill_cb_;
     DrillAnnounceCallback drill_announce_cb_;
     MusicCallback music_cb_;
+    UserIdentifiedCallback user_identified_cb_;
     hecquin::voice::MusicSideEffects music_fx_;
     PipelineEventSink event_sink_;
     std::atomic<bool>& app_running_;
@@ -227,6 +260,12 @@ private:
     ListenerMode mode_ = ListenerMode::Assistant;
     ListenerMode home_mode_ = ListenerMode::Assistant;
     bool pending_drill_announce_ = false;
+    /// Tier-2 #8: when `false`, the listener waits for an explicit
+    /// `DrillAdvance` intent ("next" / "again" / "skip") before
+    /// announcing the next drill sentence.  Default `true` keeps the
+    /// pre-existing snappy auto-advance behaviour.  Flip via
+    /// `HECQUIN_DRILL_AUTO_ADVANCE=0`.
+    bool drill_auto_advance_ = true;
 
     std::unique_ptr<hecquin::voice::UtteranceCollector> collector_;
     std::unique_ptr<hecquin::voice::TtsResponsePlayer> player_;
@@ -238,4 +277,16 @@ private:
      * even when callers reuse the no-arg `VoiceListenerConfig`.
      */
     hecquin::voice::AudioBargeInController barge_;
+
+    /// Audio cues for silent failures / acknowledgements.  Disabled
+    /// via `HECQUIN_EARCONS=0`; otherwise plays synthesised tones.
+    hecquin::voice::Earcons earcons_;
+
+    /// Surfaces mode changes via a short audible cue (default impl).
+    /// Tier-2 #10: GPIO/LED implementations swap in via `set_mode_indicator`.
+    std::unique_ptr<hecquin::voice::ModeIndicator> mode_indicator_;
+
+    /// Wake-word / push-to-talk gate.  Default mode = `Always`
+    /// (preserves pre-existing behaviour); flip via `HECQUIN_WAKE_MODE`.
+    hecquin::voice::WakeWordGate wake_gate_;
 };

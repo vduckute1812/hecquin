@@ -17,6 +17,13 @@ struct Action {
      * regex on the transcript to figure out which direction the toggle went.
      */
     bool enable = false;
+    /**
+     * Free-form action parameter.  Currently only `IdentifyUser` populates
+     * this with the captured display name (e.g. "mia") so the listener can
+     * forward it to a `LearningStore::upsert_user` callback without
+     * re-running the regex.  Other action kinds leave it empty.
+     */
+    std::string param;
 };
 
 /** Short ASCII label for logs (not localized). */
@@ -50,6 +57,24 @@ struct Action {
             return "PronunciationFeedback";
         case ActionKind::DrillModeToggle:
             return "DrillModeToggle";
+        case ActionKind::DrillAdvance:
+            return "DrillAdvance";
+        case ActionKind::MusicVolumeUp:
+            return "MusicVolumeUp";
+        case ActionKind::MusicVolumeDown:
+            return "MusicVolumeDown";
+        case ActionKind::MusicSkip:
+            return "MusicSkip";
+        case ActionKind::AbortReply:
+            return "AbortReply";
+        case ActionKind::Help:
+            return "Help";
+        case ActionKind::Sleep:
+            return "Sleep";
+        case ActionKind::Wake:
+            return "Wake";
+        case ActionKind::IdentifyUser:
+            return "IdentifyUser";
     }
     return "Unknown";
 }

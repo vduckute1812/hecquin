@@ -6,6 +6,7 @@
 #include "voice/VoiceListener.hpp"
 
 #include <memory>
+#include <optional>
 #include <string>
 
 namespace hecquin::learning {
@@ -78,6 +79,23 @@ public:
     /** Matcher config built from the learning-phrase lists in AppConfig. */
     hecquin::ai::LocalIntentMatcherConfig matcher_config() const;
 
+    /**
+     * Tier-4 #16: install the IdentifyUser → LearningStore::upsert_user
+     * bridge so a "this is Mia" / "I'm Liam" intent updates the in-app
+     * `current_user_id_`.  Subsequent progress writes can be namespaced
+     * per user once the lower-level writers grow a user_id parameter.
+     */
+    void wire_user_identification(VoiceListener& listener);
+
+    /**
+     * Tier-4 #17: speak a short welcome-back line summarising the
+     * current user's last session score and weakest phoneme.  No-op
+     * when the store is closed or there is no usable history.  Safe to
+     * call before `listener.run()` — uses the same Piper backend as
+     * `VoiceApp::speak_capability_summary`.
+     */
+    void speak_welcome_back();
+
     voice::VoiceApp&             voice()          { return voice_app_; }
     LearningStore&               store()          { return *store_; }
     bool                         store_open()     const;
@@ -104,6 +122,13 @@ private:
     std::unique_ptr<PronunciationDrillProcessor>   drill_;
     bool                                           drill_ok_ = false;
     bool                                           shut_ = false;
+    /**
+     * Tier-4 #16: row id of the most recently identified user.  Stays
+     * `nullopt` until a `IdentifyUser` intent fires (or future builds
+     * load a persisted "last user" preference at boot).  Reads default
+     * to "all users" when absent so single-user rigs don't regress.
+     */
+    std::optional<int64_t>                         current_user_id_;
 };
 
 } // namespace cli

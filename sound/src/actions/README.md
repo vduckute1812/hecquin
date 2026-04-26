@@ -9,12 +9,12 @@ reply plus whatever extra context the caller needs to react.
 
 | File | Purpose |
 |---|---|
-| `ActionKind.hpp` | `enum class ActionKind` — `None`, `LocalDevice`, `InteractionTopicSearch`, `MusicSearchPrompt`, `MusicPlayback`, `MusicNotFound`, `MusicCancel`, `MusicPause`, `MusicResume`, `ExternalApi`, `EnglishLesson`, `LessonModeToggle`, `PronunciationFeedback`, `DrillModeToggle`. |
+| `ActionKind.hpp` | `enum class ActionKind` — `None`, `LocalDevice`, `InteractionTopicSearch`, `MusicSearchPrompt`, `MusicPlayback`, `MusicNotFound`, `MusicCancel`, `MusicPause`, `MusicResume`, `MusicVolumeUp`, `MusicVolumeDown`, `MusicSkip`, `ExternalApi`, `EnglishLesson`, `LessonModeToggle`, `PronunciationFeedback`, `DrillModeToggle`, `DrillAdvance`, `AbortReply`, `Help`, `Sleep`, `Wake`, `IdentifyUser`. |
 | `Action.hpp` | The canonical value type: `{ kind, reply, transcript, enable }`. `enable` is only meaningful for the two `*ModeToggle` kinds (set by `LocalIntentMatcher`). Includes `actionKindLabel(ActionKind)` for logs. |
 | `DeviceAction.hpp` | Smart-home style confirmations (`"turning the air on"`). |
 | `ExternalApiAction.hpp` | Wraps the chat-completion reply when nothing local matched. |
 | `TopicSearchAction.hpp` | Prompt to the learner to choose a story / topic. |
-| `MusicAction.hpp` | Music intent — static factories `prompt()` / `playback(ok, title)` / `cancel()` that drive the two-turn "open music → song name → play" flow. |
+| `MusicAction.hpp` | Music intent — static factories `prompt()` / `playback(ok, title)` / `cancel()` / `pause()` / `resume()` / `volume_up()` / `volume_down()` / `skip()` that drive the two-turn "open music → song name → play" flow plus the in-song voice controls (volume, skip, confirm-cancel). |
 | `GrammarCorrectionAction.hpp` | The tutor's parsed "You said / Better / Reason" triple. |
 | `PronunciationFeedbackAction.hpp` | Drill score + weakest-phoneme feedback; doubles as the `DrillModeToggle` carrier. |
 | `NoneAction.hpp` | Empty-transcript guard. |
@@ -36,12 +36,19 @@ The router's `Result::action` is then fed into `TtsResponsePlayer::speak(...)`.
 
 - Keep these headers dependency-free — no SDL, no curl, no SQLite. They are
   included into every tier of the project.
-- When adding a new `ActionKind`, update `actionKindLabel` in
-  `Action.hpp` so logs stay readable.
+- When adding a new `ActionKind`, update three places in lock-step:
+  1. `actionKindLabel` in `Action.hpp` so logs stay readable.
+  2. The `ActionSideEffectRegistry::descriptor_for` table in
+     [`../voice/ActionSideEffectRegistry.cpp`](../voice/ActionSideEffectRegistry.cpp)
+     so the listener knows how the new kind affects mode / TTS / music.
+  3. A regex pattern in [`../ai/LocalIntentMatcher.cpp`](../ai/LocalIntentMatcher.cpp)
+     if the intent should be handled offline (and not require an LLM round-trip).
 
 See also: [`../ai/README.md`](../ai/README.md) for how routing produces
-actions, and [`../voice/README.md`](../voice/README.md) for how they are
-consumed.
+actions, [`../voice/README.md`](../voice/README.md) for how they are
+consumed, and [`../../UX_FLOW.md`](../../UX_FLOW.md) for the user-facing
+behaviour of `Sleep` / `Wake` / `AbortReply` / `Help` / `IdentifyUser` /
+`DrillAdvance` / `MusicVolume*` / `MusicSkip`.
 
 ## UML — class diagram
 
@@ -69,11 +76,20 @@ classDiagram
         MusicCancel
         MusicPause
         MusicResume
+        MusicVolumeUp
+        MusicVolumeDown
+        MusicSkip
         ExternalApi
         EnglishLesson
         LessonModeToggle
         PronunciationFeedback
         DrillModeToggle
+        DrillAdvance
+        AbortReply
+        Help
+        Sleep
+        Wake
+        IdentifyUser
     }
     class DeviceAction
     class MusicAction
