@@ -150,10 +150,8 @@ std::vector<std::string> sample_drill_sentences(sqlite3* db, int limit) {
 
 #endif // HECQUIN_WITH_SQLITE
 
-// ---------------------------------------------------------------------
 // LearningStore façade: every method below is a one-line forwarder to
 // the free function in `store::detail`.  Keep this section thin.
-// ---------------------------------------------------------------------
 
 std::optional<int64_t> LearningStore::upsert_document(const DocumentRecord& doc,
                                                       const std::vector<float>& embedding) {

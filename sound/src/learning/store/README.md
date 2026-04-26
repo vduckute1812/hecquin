@@ -16,7 +16,7 @@ clean seam.
 | `LearningStore.cpp` | Lifecycle + metadata (open / close, kv, `StatementCache`). |
 | `LearningStoreMigrations.cpp` | All DDL. Schema v3 — documents, ingested_files, sessions, interactions, vocab, pronunciation_attempts, phoneme_mastery, api_calls, pipeline_events, drill pool, vec0 virtual table. |
 | `LearningStoreDocuments.cpp` | Forwards to [`detail::DocumentsOps`](./detail/README.md). |
-| `LearningStoreVectorSearch.cpp` | Forwards to `detail::VectorSearchOps` (vec0 path + BLOB brute-force fallback). |
+| `LearningStoreVectorSearch.cpp` | Forwards to `detail::VectorSearchOps` (vec0 path + BLOB brute-force fallback). The two SQL paths are split into private helpers `query_top_k_vec0` / `query_top_k_scan` and share a single `map_row_to_retrieved` row mapper, so the row→`RetrievedDocument` decode logic is no longer duplicated. |
 | `LearningStoreSessions.cpp` | Forwards to `detail::SessionsOps`. |
 | `LearningStorePronunciation.cpp` | Forwards to `detail::PronunciationOps`. |
 | `LearningStoreApiCalls.cpp` | Forwards to `detail::ApiCallsOps` (writes api_calls + pipeline_events). |

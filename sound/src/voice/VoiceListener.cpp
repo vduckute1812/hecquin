@@ -1,6 +1,5 @@
 #include "voice/VoiceListener.hpp"
 
-#include "common/EnvParse.hpp"
 #include "voice/ActionSideEffectRegistry.hpp"
 #include "voice/PipelineTelemetry.hpp"
 #include "voice/SecondaryVadGate.hpp"
@@ -13,36 +12,18 @@
 #include <thread>
 #include <utility>
 
-void VoiceListenerConfig::apply_env_overrides() {
-    namespace env = hecquin::common::env;
-    float v = 0.0f;
-    if (env::parse_float("HECQUIN_VAD_VOICE_RMS_THRESHOLD", v)) {
-        voice_rms_threshold = v;
-        voice_rms_threshold_pinned = true;
-    }
-    if (env::parse_float("HECQUIN_VAD_MIN_VOICED_RATIO", v)) min_voiced_frame_ratio = v;
-    if (env::parse_float("HECQUIN_VAD_MIN_UTTERANCE_RMS", v)) {
-        min_utterance_rms = v;
-        min_utterance_rms_pinned = true;
-    }
+// VoiceListenerConfig::apply_env_overrides moved to
+// voice/VoiceListenerConfig.cpp.
 
-    if (env::parse_float("HECQUIN_VAD_K_START", v))    k_start = v;
-    if (env::parse_float("HECQUIN_VAD_K_CONTINUE", v)) k_continue = v;
-    if (env::parse_float("HECQUIN_VAD_K_UTT", v))      k_utt = v;
-    if (env::parse_float("HECQUIN_VAD_MIN_START_THR", v)) adaptive_min_start_thr = v;
+namespace {
 
-    int iv = 0;
-    if (env::parse_int("HECQUIN_VAD_MAX_UTTERANCE_MS", iv)) max_utterance_ms = iv;
-
-    bool flag = false;
-    if (env::parse_bool("HECQUIN_VAD_AUTO", flag)) {
-        auto_calibrate = flag;
-        auto_adapt = flag;
-    }
-    if (env::parse_bool("HECQUIN_VAD_DEBUG", flag)) {
-        debug = flag;
-    }
+hecquin::voice::AudioBargeInController::Config make_barge_config() {
+    hecquin::voice::AudioBargeInController::Config cfg;
+    cfg.apply_env_overrides();
+    return cfg;
 }
+
+} // namespace
 
 VoiceListener::VoiceListener(WhisperEngine& whisper,
                              AudioCapture& capture,
@@ -55,13 +36,30 @@ VoiceListener::VoiceListener(WhisperEngine& whisper,
       commands_(commands),
       app_running_(app_running),
       piper_model_path_(std::move(piper_model_path)),
-      cfg_(cfg) {
+      cfg_(cfg),
+      barge_(make_barge_config()) {
+    // Mirror the controller's TTS-active threshold boost into the
+    // collector's per-frame VAD so the boost is consistent whichever
+    // side reads it.  Single source of truth: the barge config.
+    cfg_.tts_threshold_boost = barge_.tts_threshold_boost();
+
     collector_ = std::make_unique<hecquin::voice::UtteranceCollector>(
         capture_, cfg_, app_running_);
     player_ = std::make_unique<hecquin::voice::TtsResponsePlayer>(
-        capture_, piper_model_path_);
+        capture_, piper_model_path_, &barge_, collector_.get());
     telemetry_ = std::make_unique<hecquin::voice::PipelineTelemetry>();
     music_fx_.set_collector(collector_.get());
+    music_fx_.set_barge_controller(&barge_);
+
+    // Edge-triggered: collector tells us when frame VAD flips.
+    collector_->set_voice_state_callback(
+        [this](bool voice) { barge_.on_voice_state_change(voice); });
+    // Frame-cadence: drives the controller's hold-timer release.
+    collector_->set_frame_callback(
+        [this] {
+            barge_.tick(
+                hecquin::voice::AudioBargeInController::Clock::now());
+        });
 }
 
 VoiceListener::~VoiceListener() = default;

@@ -33,7 +33,7 @@ public:
 int main() {
     using hecquin::learning::EmbeddingClient;
 
-    // --- parse_response ------------------------------------------------------
+    // parse_response
     {
         const std::string body =
             R"({"data":[{"embedding":[0.1,0.2,0.3]},{"embedding":[0.4,0.5,0.6]}]})";
@@ -60,7 +60,7 @@ int main() {
         if (got) return fail("wrong count should be nullopt");
     }
 
-    // --- build_request_body --------------------------------------------------
+    // build_request_body
     {
         const auto body = EmbeddingClient::build_request_body(
             "gemini-embedding-001", {"hello", "world"}, 8);
@@ -76,7 +76,7 @@ int main() {
         }
     }
 
-    // --- End-to-end through fake HTTP ---------------------------------------
+    // End-to-end through fake HTTP
     {
         FakeHttp fake;
         fake.canned = {200,

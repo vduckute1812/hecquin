@@ -14,6 +14,8 @@
 
 #include "voice/MusicSideEffects.hpp"
 
+#include "voice/AudioBargeInController.hpp"
+
 #include <iostream>
 
 namespace {
@@ -95,6 +97,50 @@ int main() {
         fx.on_pause();
         fx.on_resume();
         expect(true, "null collector is tolerated");
+    }
+
+    {
+        // T1.5 lock-step: every state-changing on_* method must move the
+        // barge controller's music_active flag in lock-step with the
+        // collector's external-audio gate.  The collector side has no
+        // public observer, but the barge controller side is observable
+        // via `ducking()` after a voice event (ducking only fires when
+        // music is active), so we use it as a proxy.
+        using hecquin::voice::AudioBargeInController;
+        AudioBargeInController::Config cfg;
+        cfg.attack_ms  = 0;   // synchronous-looking transitions for the test
+        cfg.release_ms = 0;
+        cfg.hold_ms    = 0;
+        AudioBargeInController barge(cfg);
+
+        MusicSideEffects fx;
+        fx.set_barge_controller(&barge);
+
+        fx.on_playback_started();
+        barge.on_voice_state_change(true);
+        expect(barge.ducking(),
+               "playback_started -> barge.set_music_active(true) -> duck on voice");
+        barge.on_voice_state_change(false);
+        barge.tick(AudioBargeInController::Clock::now());
+        expect(!barge.ducking(), "voice off + zero hold -> unduck");
+
+        fx.on_pause();
+        barge.on_voice_state_change(true);
+        expect(!barge.ducking(),
+               "on_pause -> music inactive -> no duck on voice");
+        barge.on_voice_state_change(false);
+
+        fx.on_resume();
+        barge.on_voice_state_change(true);
+        expect(barge.ducking(),
+               "on_resume -> music active again -> duck on voice");
+        barge.on_voice_state_change(false);
+        barge.tick(AudioBargeInController::Clock::now());
+
+        fx.on_cancel();
+        barge.on_voice_state_change(true);
+        expect(!barge.ducking(),
+               "on_cancel -> music inactive -> no duck on voice");
     }
 
     if (failures == 0) {

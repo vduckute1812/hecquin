@@ -1,13 +1,10 @@
+#include "cli/DefaultPaths.hpp"
 #include "tts/PiperSpeech.hpp"
 
 #include <SDL.h>
 
 #include <iostream>
 #include <string>
-
-#ifndef DEFAULT_PIPER_MODEL_PATH
-#define DEFAULT_PIPER_MODEL_PATH ".env/shared/models/piper/en_US-lessac-medium.onnx"
-#endif
 
 constexpr const char* FALLBACK_TEXT = "Hello! I am your robot tutor. How can I help you today?";
 

@@ -43,10 +43,8 @@ public:
     /** Expose the internal Piper-rate tracker (config reuse by tests). */
     const prosody::PitchTracker& piper_tracker() const { return piper_tracker_; }
 
-    // ------------------------------------------------------------------
     // Test-only hooks.  Populate the cache directly (no Piper, no SDL)
     // so the LRU policy can be verified offline.
-    // ------------------------------------------------------------------
     void put_for_test(const std::string& text,
                       prosody::PitchContour contour,
                       std::vector<std::int16_t> pcm,

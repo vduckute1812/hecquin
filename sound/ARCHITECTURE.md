@@ -67,7 +67,9 @@ src/
 ├── voice/
 │   ├── AudioCapture.hpp/cpp      — SDL2 microphone capture (+ `MuteGuard` RAII, `snapshotRecent` tail copy)
 │   ├── AudioCaptureConfig.hpp    — POD config (no SDL include)
-│   ├── WhisperEngine.hpp/cpp     — whisper.cpp wrapper + env-driven `WhisperConfig` (language / threads / beam)
+│   ├── WhisperEngine.hpp/cpp     — whisper.cpp wrapper + env-driven `WhisperConfig` (language / threads / beam); `transcribe()` delegates to `build_wparams` + `collect_segments` helpers
+│   ├── VoiceListenerConfig.hpp/cpp — `VoiceListenerConfig` POD + `apply_env_overrides()` (extracted from `VoiceListener.hpp`)
+│   ├── PipelineEvent.hpp         — `PipelineEvent` + `PipelineEventSink` typedefs (extracted from `VoiceListener.hpp`)
 │   ├── WhisperPostFilter.hpp/cpp — pure transcript gates (annotation strip, min-alnum, no-speech) — extracted from `WhisperEngine`
 │   ├── ListenerMode.hpp          — `ListenerMode { Assistant, Lesson, Drill, Music }` enum (own header to break cycles)
 │   ├── VoiceListener.hpp/cpp     — thin coordinator: poll loop + mode state machine
@@ -97,7 +99,7 @@ src/
 │   ├── EnvParse.hpp             — header-only `read_string / parse_int / parse_float / parse_size` for `HECQUIN_*` env vars
 │   ├── ShellEscape.hpp          — header-only `posix_sh_single_quote(...)` (single source of truth for sh escaping)
 │   ├── Subprocess.hpp/cpp       — RAII wrapper around `fork`/`exec` + stdout pipe (`spawn_read`, `kill_and_reap`)
-│   └── Utf8.hpp/cpp             — `sanitize_utf8` (drops CP-1252 0xA0, replaces overlong sequences)
+│   └── Utf8.hpp                  — `sanitize_utf8` + `utf8::{codepoint_length, is_continuation, align_to_codepoint}` (header-only; shared by chunker + IPA tokenizer)
 ├── cli/                          — bits shared across executable entry points
 │   └── DefaultPaths.hpp          — single source of truth for `DEFAULT_MODEL_PATH` / `DEFAULT_PIPER_MODEL_PATH` / `DEFAULT_CONFIG_PATH` / `DEFAULT_PROMPTS_DIR` / `DEFAULT_PRONUNCIATION_*` (CMake fallbacks for compiles outside the project build)
 ├── music/                        — pluggable music subsystem (yt-dlp + ffmpeg today)
@@ -156,8 +158,10 @@ src/
 │   │       └── DrillProgressLogger.hpp/cpp    — per-phoneme JSON + ProgressTracker bridge
 │   ├── prosody/                  — local intonation pipeline
 │   │   ├── PitchTracker.hpp/cpp  — YIN F0 contour + per-frame RMS
+│   │   ├── Dtw.hpp/cpp            — `dtw_mean_abs_banded` (banded DTW, rolling rows) — extracted from `IntonationScorer.cpp`
 │   │   └── IntonationScorer.hpp/cpp — semitone DTW + final-direction rule
 │   └── cli/                      — `LearningApp` shared bootstrap + `english_ingest`, `english_tutor`, `pronunciation_drill` entries
+│       └── StoreApiSink.hpp/cpp  — `make_store_api_call_sink(LearningStore&)` — shared by `english_ingest` + `english_tutor` mains
 ├── actions/
 │   ├── ActionKind.hpp            — enum: None / LocalDevice / TopicSearch / MusicSearchPrompt / MusicPlayback / MusicNotFound / MusicCancel / MusicPause / MusicResume / ExternalApi / EnglishLesson / GrammarCorrection / LessonModeToggle / PronunciationFeedback / DrillModeToggle
 │   ├── Action.hpp                — {kind, reply, transcript}
@@ -173,13 +177,15 @@ src/
 │   └── ai/AiClientConfig.hpp/cpp — OpenAI-compatible HTTP client settings
 └── tts/
     ├── PiperSpeech.hpp/cpp       — thin facade (public C-style API unchanged)
+    ├── PiperSampleRate.hpp       — `kPiperSampleRate = 22050` (single source of truth)
     ├── runtime/
-    │   └── PiperRuntime.hpp/cpp  — one-time `DYLD_FALLBACK_LIBRARY_PATH` configure
+    │   └── PiperRuntime.hpp/cpp  — one-time `DYLD_FALLBACK_LIBRARY_PATH` configure (`std::call_once`-guarded)
     ├── wav/
     │   └── WavReader.hpp/cpp     — generic 44-byte WAV reader (no Piper dependency)
     ├── backend/                  — Strategy: synthesise text → int16 PCM
     │   ├── IPiperBackend.hpp          — Strategy interface
-    │   ├── PiperSpawn.hpp/cpp         — Template Method: posix_spawn + pipe skeleton
+    │   ├── PiperSpawn.hpp/cpp         — Template Method: phase helpers (`setup_stdin_stdout_pipes` → `spawn_piper_child` → `pump_stdout` → `reap_child`) over `PipeFdGuard` RAII
+    │   ├── PiperWaitStatus.hpp/cpp    — `log_piper_wait_status(int)` shared by pipe backend + streaming play pipeline
     │   ├── PiperPipeBackend.hpp/cpp   — primary: raw PCM over pipes
     │   ├── PiperShellBackend.hpp/cpp  — legacy fallback: `echo | piper --output_file`
     │   └── PiperFallbackBackend.hpp/cpp— composite (primary → fallback) + default factory

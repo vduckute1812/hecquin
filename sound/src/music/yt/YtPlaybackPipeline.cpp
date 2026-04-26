@@ -66,6 +66,15 @@ void YtPlaybackPipeline::set_paused(bool paused) {
     if (player_) player_->set_paused(paused);
 }
 
+void YtPlaybackPipeline::set_gain_target(float linear, int ramp_ms) {
+    // Same lifetime caveat as `set_paused`: the call between the
+    // null check and the dispatch is a tiny window where `player_`
+    // could be torn down by `run()` returning.  In practice the
+    // listener thread invokes both, so the race is bounded to a
+    // single song's tail.
+    if (player_) player_->set_gain_target(linear, ramp_ms);
+}
+
 void YtPlaybackPipeline::finish_now() {
     if (player_) {
         player_->finish();

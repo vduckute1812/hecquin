@@ -72,6 +72,13 @@ public:
 private:
     void abort_locked_();
 
+    /**
+     * Aborts any in-flight song, then spawns the background playback
+     * thread for `track` while holding `thread_mu_`.  Called from
+     * `handle()` once we know we have a hit.
+     */
+    void start_playback_thread_(const MusicTrack& track);
+
     MusicProvider&    provider_;
     std::mutex        thread_mu_;
     std::thread       playback_thread_;

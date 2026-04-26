@@ -25,9 +25,7 @@ void expect(bool cond, const char* label) {
 } // namespace
 
 int main() {
-    // ------------------------------------------------------------------
     // 1. With no store and no G2P → pure round-robin.
-    // ------------------------------------------------------------------
     {
         DrillSentencePicker picker(nullptr, {});
         picker.set_pool({"one", "two", "three"});
@@ -42,18 +40,14 @@ int main() {
         expect(seen[2] == "three" && seen[5] == "three", "round-robin lap 1/2 for 'three'");
     }
 
-    // ------------------------------------------------------------------
     // 2. Empty pool → `next()` returns "" and `empty()` holds.
-    // ------------------------------------------------------------------
     {
         DrillSentencePicker picker(nullptr, {});
         expect(picker.empty(), "default picker is empty");
         expect(picker.next().empty(), "empty pool returns empty string");
     }
 
-    // ------------------------------------------------------------------
     // 3. `load()` resets the round-robin cursor to 0.
-    // ------------------------------------------------------------------
     {
         DrillSentencePicker picker(nullptr, {});
         picker.set_pool({"a", "b"});

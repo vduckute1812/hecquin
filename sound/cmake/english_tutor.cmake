@@ -13,6 +13,7 @@ endif ()
 # english_ingest: console-only ingest tool (no SDL2 / Whisper / Piper).
 add_executable(english_ingest
     ${HECQUIN_SOUND_SRC_ROOT}/learning/cli/EnglishIngest.cpp
+    ${HECQUIN_SOUND_SRC_ROOT}/learning/cli/StoreApiSink.cpp
 )
 target_link_libraries(english_ingest PRIVATE hecquin_learning)
 hecquin_set_runtime_defaults(english_ingest)
@@ -23,6 +24,7 @@ hecquin_set_runtime_defaults(english_ingest)
 add_executable(english_tutor
     ${HECQUIN_SOUND_SRC_ROOT}/learning/cli/EnglishTutorMain.cpp
     ${HECQUIN_SOUND_SRC_ROOT}/learning/cli/LearningApp.cpp
+    ${HECQUIN_SOUND_SRC_ROOT}/learning/cli/StoreApiSink.cpp
 )
 target_link_libraries(english_tutor PRIVATE
     hecquin_voice_pipeline

@@ -5,6 +5,7 @@
 
 namespace hecquin::voice {
 
+class AudioBargeInController;
 class UtteranceCollector;
 
 /**
@@ -35,6 +36,14 @@ public:
     void set_pause_callback(PauseCallback cb)   { pause_cb_  = std::move(cb); }
     void set_resume_callback(ResumeCallback cb) { resume_cb_ = std::move(cb); }
     void set_collector(UtteranceCollector* c)   { collector_ = c; }
+    /**
+     * Attach the listener's barge-in controller.  When set, the
+     * `on_playback_*` hooks below also flip
+     * `AudioBargeInController::set_music_active`, so the controller
+     * knows whether to duck the SDL output on detected voice.
+     * Optional: null is fine for tests / binaries without a mic.
+     */
+    void set_barge_controller(AudioBargeInController* c) { barge_ = c; }
 
     /**
      * Called when `MusicPlayback` fires (i.e. the async session has
@@ -67,10 +76,19 @@ public:
     void on_resume();
 
 private:
+    /**
+     * Toggle the two collaborators that need to know whether external
+     * audio is playing, in lock-step.  `active=true` engages the
+     * speaker-bleed gate and tells the barge controller music is live;
+     * `active=false` does the inverse.  Both pointers are nullable.
+     */
+    void mark_external_audio_(bool active);
+
     AbortCallback  abort_cb_;
     PauseCallback  pause_cb_;
     ResumeCallback resume_cb_;
     UtteranceCollector* collector_ = nullptr;
+    AudioBargeInController* barge_ = nullptr;
 };
 
 } // namespace hecquin::voice

@@ -49,6 +49,13 @@ public:
     void set_paused(bool paused);
 
     /**
+     * Forward an output-gain change to the active player.  Used by
+     * the barge-in controller to duck / un-duck on detected voice.
+     * Null-safe: if no playback is in progress this is a no-op.
+     */
+    void set_gain_target(float linear, int ramp_ms);
+
+    /**
      * Force the player to drain immediately.  Called by the enclosing
      * provider's `stop()` to break out of the read loop early without
      * waiting for the subprocess pipe to close.

@@ -1,5 +1,7 @@
 #include "learning/TextChunker.hpp"
 
+#include "common/Utf8.hpp"
+
 #include <algorithm>
 #include <cctype>
 #include <string_view>
@@ -8,23 +10,13 @@ namespace hecquin::learning {
 
 namespace {
 
-// UTF-8 continuation bytes have the top two bits set to 10xxxxxx. A codepoint
-// boundary is any byte whose top two bits are NOT 10 (i.e., ASCII or a lead
-// byte). Splitting inside a multi-byte sequence produces bytes that are
-// invalid UTF-8 on their own — downstream nlohmann/json aborts with
-// type_error 316 when the embedding request is serialised.
-inline bool is_utf8_continuation(unsigned char b) {
-    return (b & 0xC0u) == 0x80u;
-}
-
-// Advance `pos` forward until it sits on a codepoint boundary (or EOF).
-// Never moves beyond `text.size()`.
-size_t align_up_to_codepoint(const std::string& text, size_t pos) {
-    while (pos < text.size() &&
-           is_utf8_continuation(static_cast<unsigned char>(text[pos]))) {
-        ++pos;
-    }
-    return pos;
+// Thin shim around the shared `common::utf8::align_to_codepoint` so the
+// chunker's call sites read naturally.  Splitting inside a multi-byte
+// sequence produces bytes that are invalid UTF-8 on their own —
+// downstream nlohmann/json aborts with type_error 316 when the
+// embedding request is serialised.
+inline size_t align_up_to_codepoint(const std::string& text, size_t pos) {
+    return hecquin::common::utf8::align_to_codepoint(text, pos);
 }
 
 } // namespace

@@ -1,13 +1,8 @@
 #pragma once
 
-// Compile-time default paths injected by CMake (see
-// `hecquin_set_runtime_defaults`).  The fallbacks below keep every
-// executable compilable outside the project build *and* keep the four
-// mains in sync — historically each main carried a slightly-different
-// copy of this block (`.env/models/...` vs `.env/shared/models/...`).
-//
-// Include this single header instead of duplicating the block.  The
-// macros are defined only when CMake hasn't already supplied them.
+// Compile-time default paths injected by CMake `hecquin_set_runtime_defaults`.
+// The `#ifndef` fallbacks keep this header buildable standalone and keep all
+// mains in sync (avoids the old `.env/models` vs `.env/shared/models` drift).
 
 #include "config/ConfigStore.hpp"
 

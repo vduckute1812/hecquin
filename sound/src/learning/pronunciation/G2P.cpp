@@ -1,5 +1,7 @@
 #include "learning/pronunciation/G2P.hpp"
 
+#include "common/ShellEscape.hpp"
+
 #include <array>
 #include <cctype>
 #include <cstdio>
@@ -14,17 +16,7 @@ namespace hecquin::learning::pronunciation {
 
 namespace {
 
-std::string shell_quote(const std::string& value) {
-    std::string q;
-    q.reserve(value.size() + 2);
-    q.push_back('\'');
-    for (char c : value) {
-        if (c == '\'') q += "'\\''";
-        else q.push_back(c);
-    }
-    q.push_back('\'');
-    return q;
-}
+using hecquin::common::posix_sh_single_quote;
 
 // Strip leading/trailing whitespace + simple ASCII punctuation from a word.
 std::string clean_word(const std::string& in) {
@@ -100,9 +92,9 @@ std::string G2P::run_espeak_(const std::string& text) const {
     // espeak-ng -q (no audio) -x (write phonemes) --ipa=3 (IPA with word separators)
     // -v <voice>
     const std::string cmd =
-        shell_quote(opts_.espeak_executable) +
-        " -q --ipa=3 -v " + shell_quote(opts_.voice) +
-        " " + shell_quote(text) +
+        posix_sh_single_quote(opts_.espeak_executable) +
+        " -q --ipa=3 -v " + posix_sh_single_quote(opts_.voice) +
+        " " + posix_sh_single_quote(text) +
         " 2>/dev/null";
 
     std::array<char, 4096> buf{};

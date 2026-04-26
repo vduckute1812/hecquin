@@ -83,4 +83,8 @@ void YouTubeMusicProvider::resume() {
     if (pipeline_) pipeline_->set_paused(false);
 }
 
+void YouTubeMusicProvider::set_gain_target(float linear, int ramp_ms) {
+    if (pipeline_) pipeline_->set_gain_target(linear, ramp_ms);
+}
+
 } // namespace hecquin::music

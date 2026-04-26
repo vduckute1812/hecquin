@@ -5,6 +5,7 @@
 #include <atomic>
 #include <chrono>
 #include <cstddef>
+#include <functional>
 #include <optional>
 #include <vector>
 
@@ -97,6 +98,49 @@ public:
         announced_calibration_done_ = false;
     }
 
+    /**
+     * Live snapshot of the per-frame VAD decision (true = the most
+     * recent poll tick crossed the start / continue threshold).  Used
+     * by the barge-in controller to mirror the collector's voice
+     * decision from another thread without re-running the gate.
+     */
+    bool voice_active() const {
+        return voice_active_.load(std::memory_order_acquire);
+    }
+
+    /**
+     * Subscribe to voice ON/OFF transitions.  The callback fires from
+     * inside `collect_next()` exactly once per edge (no debouncing
+     * here — the controller decides on attack / hold / release).
+     * Setting an empty `std::function` clears the subscription.
+     */
+    void set_voice_state_callback(std::function<void(bool)> cb) {
+        voice_state_cb_ = std::move(cb);
+    }
+
+    /**
+     * Subscribe to per-poll-frame callbacks.  Invoked once per
+     * `cfg_.poll_interval_ms` from inside `collect_next()`, regardless
+     * of voice activity.  Used by the barge-in controller's hold-timer
+     * tick — it lets a deferred un-duck fire even while the collector
+     * is still sitting silently in its poll loop, without spinning up
+     * a separate timer thread.
+     */
+    void set_frame_callback(std::function<void()> cb) {
+        frame_cb_ = std::move(cb);
+    }
+
+    /**
+     * Mark the assistant as actively speaking.  While set, the per-frame
+     * VAD multiplies its start / continue thresholds by
+     * `cfg_.tts_threshold_boost` so the assistant's own bleed cannot
+     * trip ducking / barge-in.  Atomic so the TTS thread can flip it
+     * without locking the poll loop.
+     */
+    void set_tts_active(bool active) {
+        tts_active_.store(active, std::memory_order_release);
+    }
+
 private:
     /** Reason `collect_next()` decided to close the current utterance. */
     enum class EndReason {
@@ -126,6 +170,30 @@ private:
     /** Print the closing emoji line for the chosen end reason. */
     void announce_recording_complete_(EndReason reason) const;
 
+    /** Outcome of a single `poll_tick_` invocation. */
+    struct TickResult {
+        enum class Kind {
+            Continue,        ///< Keep polling.
+            EmitUtterance,   ///< `u` is closed and ready to be returned.
+        };
+        Kind kind = Kind::Continue;
+    };
+
+    /**
+     * One iteration of the `collect_next` poll loop:
+     *   1. snapshot a VAD window + compute frame RMS,
+     *   2. update the noise-floor tracker + thresholds,
+     *   3. fire frame / voice-edge callbacks,
+     *   4. transition the collection state machine and decide whether
+     *      the utterance just closed (returns `EmitUtterance`) or the
+     *      caller should keep polling (`Continue`).
+     *
+     * Splitting it out keeps `collect_next` a tiny while-loop and makes
+     * each per-tick concern individually inspectable.
+     */
+    TickResult poll_tick_(CollectedUtterance& u, bool& collecting,
+                          std::vector<float>& vad_window);
+
     AudioCapture& capture_;
     const VoiceListenerConfig& cfg_;
     const std::atomic<bool>& app_running_;
@@ -146,6 +214,18 @@ private:
      * sees changes promptly without taking a lock.
      */
     std::atomic<bool> external_audio_active_{false};
+    /**
+     * Tracks the most recent per-frame VAD decision so `collect_next()`
+     * can detect ON/OFF edges and notify subscribers.  Atomic so other
+     * threads can read the live state via `voice_active()`.
+     */
+    std::atomic<bool> voice_active_{false};
+    /** Set by `set_tts_active`; raises the per-frame VAD thresholds. */
+    std::atomic<bool> tts_active_{false};
+    /** Edge-triggered notification target; stored on the listener thread. */
+    std::function<void(bool)> voice_state_cb_;
+    /** Frame-cadence notification target; stored on the listener thread. */
+    std::function<void()> frame_cb_;
 };
 
 } // namespace hecquin::voice

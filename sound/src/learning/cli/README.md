@@ -9,8 +9,9 @@ module. `LearningApp` owns everything the `english_tutor` and
 | File | Produces | Purpose |
 |---|---|---|
 | `LearningApp.hpp/cpp` | — | Shared bootstrap helper. Opens `LearningStore` + migrations, resolves pronunciation paths, constructs `ProgressTracker` + base `PronunciationDrillProcessor`, seeds `LocalIntentMatcherConfig`, and exposes `wire_pipeline_sink` / `wire_drill_callbacks` helpers so each `main()` only owns the mode-specific glue. |
-| `EnglishIngest.cpp` | `english_ingest` | Curriculum → chunks → embeddings → SQLite. Thin `main()` that constructs an `Ingestor` and prints the resulting `IngestReport`. |
-| `EnglishTutorMain.cpp` | `english_tutor` | Tutor binary. Uses `LearningApp` to wire everything, installs a `TutorCallback` backed by `EnglishTutorProcessor`, starts in `ListenerMode::Lesson`. |
+| `StoreApiSink.hpp/cpp` | — | `make_store_api_call_sink(LearningStore&) → ApiCallSink` factory. Both `EnglishIngest` and `EnglishTutorMain` plug the resulting lambda into `LoggingHttpClient` so every embedding / chat call lands in `documents` API-call telemetry. Single source of truth for the lambda body. |
+| `EnglishIngest.cpp` | `english_ingest` | Curriculum → chunks → embeddings → SQLite. Thin `main()` that constructs an `Ingestor` and prints the resulting `IngestReport`. Uses `StoreApiSink` + `cli/DefaultPaths.hpp` for telemetry + path defaults. |
+| `EnglishTutorMain.cpp` | `english_tutor` | Tutor binary. Uses `LearningApp` to wire everything, installs a `TutorCallback` backed by `EnglishTutorProcessor`, starts in `ListenerMode::Lesson`. Telemetry sink built via `StoreApiSink`. |
 | `PronunciationDrillMain.cpp` | `pronunciation_drill` | Drill binary. Uses `LearningApp` to wire everything, forces the listener into `ListenerMode::Drill`, relies on `wire_drill_callbacks` for the `setDrillCallback` / `setDrillAnnounceCallback` pair. |
 
 ## Why `LearningApp` exists

@@ -83,9 +83,11 @@ set(HECQUIN_MUSIC_SOURCES
 if (NOT TARGET hecquin_voice_pipeline)
     add_library(hecquin_voice_pipeline STATIC
         ${HECQUIN_SOUND_SRC_ROOT}/voice/AudioCapture.cpp
+        ${HECQUIN_SOUND_SRC_ROOT}/voice/AudioBargeInController.cpp
         ${HECQUIN_SOUND_SRC_ROOT}/voice/WhisperEngine.cpp
         ${HECQUIN_SOUND_SRC_ROOT}/voice/WhisperPostFilter.cpp
         ${HECQUIN_SOUND_SRC_ROOT}/voice/VoiceListener.cpp
+        ${HECQUIN_SOUND_SRC_ROOT}/voice/VoiceListenerConfig.cpp
         ${HECQUIN_SOUND_SRC_ROOT}/voice/VoiceApp.cpp
         ${HECQUIN_SOUND_SRC_ROOT}/voice/SecondaryVadGate.cpp
         ${HECQUIN_SOUND_SRC_ROOT}/voice/NoiseFloorTracker.cpp
@@ -155,6 +157,7 @@ if (HECQUIN_HAS_SQLITE AND NOT TARGET hecquin_learning)
     target_include_directories(hecquin_learning PUBLIC ${HECQUIN_SOUND_SRC_ROOT})
     target_link_libraries(hecquin_learning PUBLIC
         hecquin_ai
+        hecquin_common
         hecquin_deps_sqlite_vec)
     set_target_properties(hecquin_learning PROPERTIES POSITION_INDEPENDENT_CODE ON)
 endif ()
@@ -164,6 +167,7 @@ endif ()
 if (NOT TARGET hecquin_prosody)
     add_library(hecquin_prosody STATIC
         ${HECQUIN_SOUND_SRC_ROOT}/learning/prosody/PitchTracker.cpp
+        ${HECQUIN_SOUND_SRC_ROOT}/learning/prosody/Dtw.cpp
         ${HECQUIN_SOUND_SRC_ROOT}/learning/prosody/IntonationScorer.cpp
     )
     target_include_directories(hecquin_prosody PUBLIC ${HECQUIN_SOUND_SRC_ROOT})
@@ -185,7 +189,7 @@ if (NOT TARGET hecquin_pronunciation)
     )
     target_include_directories(hecquin_pronunciation PUBLIC ${HECQUIN_SOUND_SRC_ROOT})
     target_link_libraries(hecquin_pronunciation
-        PUBLIC hecquin_deps_json hecquin_deps_onnxruntime)
+        PUBLIC hecquin_deps_json hecquin_deps_onnxruntime hecquin_common)
     set_target_properties(hecquin_pronunciation PROPERTIES POSITION_INDEPENDENT_CODE ON)
 endif ()
 

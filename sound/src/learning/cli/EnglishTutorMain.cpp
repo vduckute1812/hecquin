@@ -9,6 +9,7 @@
 #include "learning/PronunciationDrillProcessor.hpp"
 #include "learning/RetrievalService.hpp"
 #include "learning/cli/LearningApp.hpp"
+#include "learning/cli/StoreApiSink.hpp"
 #include "learning/store/LearningStore.hpp"
 #include "voice/MusicWiring.hpp"
 #include "voice/VoiceListener.hpp"
@@ -31,19 +32,13 @@ int main() {
     AppConfig& cfg = app.config();
     auto& store = app.store();
 
-    // Decorator chain: CurlHttpClient → LoggingHttpClient → RetryingHttpClient.
-    // The retrier sits *outside* the logger so every HTTP attempt — including
-    // the failed ones the retrier re-issues — shows up as its own `api_calls`
-    // row.  That makes rate-limit churn visible on the dashboard.
+    // CurlHttpClient → LoggingHttpClient → RetryingHttpClient: retrier wraps
+    // logger so each retry attempt becomes its own `api_calls` row (rate-limit
+    // churn stays visible on the dashboard).
     hecquin::ai::CurlHttpClient      raw_http;
     hecquin::ai::ApiCallSink         sink;
     if (app.store_open()) {
-        sink = [&store](const hecquin::ai::ApiCallRecord& r) {
-            store.record_api_call(r.provider, r.endpoint, r.method,
-                                  r.status, r.latency_ms,
-                                  r.request_bytes, r.response_bytes,
-                                  r.ok, r.error);
-        };
+        sink = hecquin::learning::cli::make_store_api_call_sink(store);
     }
     hecquin::ai::LoggingHttpClient   logged_chat_http(raw_http, "chat", sink);
     hecquin::ai::LoggingHttpClient   logged_embed_http(raw_http, "embedding", sink);

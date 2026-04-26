@@ -51,6 +51,20 @@ public:
     virtual void pause() {}
     /** Best-effort: counterpart to `pause()`.  Default no-op. */
     virtual void resume() {}
+    /**
+     * Best-effort: set the linear output gain on the underlying audio
+     * device.  Used by the barge-in controller to duck the music when
+     * the user starts speaking.  Default no-op for providers that
+     * have no concept of post-fader gain (they can implement it later
+     * without changing callers).  Non-virtual / unscoped intentionally
+     * — providers that opt in override; everything else stays silent.
+     *
+     * @param linear  0 = silent, 1 = unattenuated, >1 = boosted.
+     * @param ramp_ms cross-fade duration to avoid clicks.
+     */
+    virtual void set_gain_target(float linear, int ramp_ms) {
+        (void)linear; (void)ramp_ms;
+    }
 };
 
 } // namespace hecquin::music

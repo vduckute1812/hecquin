@@ -1,5 +1,6 @@
 #include "tts/playback/BufferedSdlPlayer.hpp"
 
+#include "tts/PiperSampleRate.hpp"
 #include "tts/playback/SdlAudioDevice.hpp"
 
 #include <SDL.h>
@@ -12,7 +13,6 @@ namespace hecquin::tts::playback {
 
 namespace {
 
-constexpr int kPiperSampleRate = 22050;
 constexpr int kAudioBufferSamples = 4096;
 
 struct BufferedAudioState {
@@ -46,7 +46,7 @@ bool play_mono_22k(const std::vector<std::int16_t>& samples) {
     state.samples = samples;
 
     const SDL_AudioDeviceID dev = open_mono_s16_device(
-        &buffered_callback, &state, kPiperSampleRate, kAudioBufferSamples);
+        &buffered_callback, &state, hecquin::tts::kPiperSampleRate, kAudioBufferSamples);
     if (dev == 0) {
         return false;
     }

@@ -1,5 +1,7 @@
 #include "learning/pronunciation/PhonemeVocab.hpp"
 
+#include "common/Utf8.hpp"
+
 #include <nlohmann/json.hpp>
 
 #include <algorithm>
@@ -109,14 +111,13 @@ bool is_skippable_codepoint(const std::string& stream, std::size_t pos, std::siz
 }
 
 // Advance one UTF-8 codepoint from `pos`; returns the new offset.
+// Uses the shared `common::utf8` helper so any future fix-up of the
+// codepoint-length table benefits every call site.
 std::size_t next_codepoint(const std::string& s, std::size_t pos) {
     if (pos >= s.size()) return pos;
     const unsigned char c = static_cast<unsigned char>(s[pos]);
-    if      ((c & 0x80) == 0x00) return pos + 1;
-    else if ((c & 0xE0) == 0xC0) return pos + 2;
-    else if ((c & 0xF0) == 0xE0) return pos + 3;
-    else if ((c & 0xF8) == 0xF0) return pos + 4;
-    return pos + 1;   // malformed; advance one byte
+    const std::size_t len = hecquin::common::utf8::codepoint_length(c);
+    return pos + (len == 0 ? 1 : len);
 }
 
 }  // namespace

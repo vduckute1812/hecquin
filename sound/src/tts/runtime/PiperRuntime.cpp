@@ -2,6 +2,7 @@
 
 #include <cstdlib>
 #include <filesystem>
+#include <mutex>
 #include <string>
 
 #ifndef PIPER_EXECUTABLE
@@ -10,7 +11,9 @@
 
 namespace hecquin::tts::runtime {
 
-void configure() {
+namespace {
+
+void configure_once_() {
 #ifdef __APPLE__
     std::string fallback_libs;
     const std::filesystem::path piper_path(PIPER_EXECUTABLE);
@@ -39,6 +42,17 @@ void configure() {
         setenv("DYLD_LIBRARY_PATH", fallback_libs.c_str(), 1);
     }
 #endif
+}
+
+} // namespace
+
+void configure() {
+    // `run_pipe_synth` calls this on every spawn but the work below is
+    // idempotent: it sets two process-global env vars from filesystem
+    // probes that never change after the first call.  Wrap in
+    // `call_once` so the second-and-onwards spawns are ~free.
+    static std::once_flag once;
+    std::call_once(once, configure_once_);
 }
 
 } // namespace hecquin::tts::runtime

@@ -10,6 +10,7 @@
 #include "learning/pronunciation/drill/DrillSentencePicker.hpp"
 #include "learning/prosody/PitchTracker.hpp"
 
+#include <functional>
 #include <memory>
 #include <string>
 #include <vector>
@@ -135,7 +136,23 @@ public:
         return scoring_.user_pitch_tracker();
     }
 
+    /**
+     * Override the user-facing announce hook (default: prints
+     * `"🎯 Reference: <text>"` to `std::cout`).  Tests inject a sink so
+     * the orchestration logic can be exercised without capturing
+     * stdout, and embedders can swap in a structured-log path.
+     */
+    void set_announce_callback(std::function<void(const std::string&)> cb) {
+        announce_cb_ = std::move(cb);
+    }
+
 private:
+    /** Resolve the sentence pool: file → DB → fallback, then shuffle. */
+    std::vector<std::string> resolve_sentence_pool_();
+
+    /** Build a fresh G2P over `scoring_.vocab()` and seed the picker. */
+    void prime_picker_(std::vector<std::string> pool);
+
     const AppConfig& app_cfg_;
     LearningStore* store_;
     PronunciationDrillConfig cfg_;
@@ -153,6 +170,8 @@ private:
     pronunciation::G2PResult test_plan_;
 
     bool loaded_ = false;
+
+    std::function<void(const std::string&)> announce_cb_;
 };
 
 } // namespace hecquin::learning

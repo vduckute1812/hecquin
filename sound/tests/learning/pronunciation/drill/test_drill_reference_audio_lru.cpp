@@ -35,9 +35,7 @@ PitchContour make_contour(float f0) {
 } // namespace
 
 int main() {
-    // ------------------------------------------------------------------
     // 1. Basic insert + lookup.
-    // ------------------------------------------------------------------
     {
         DrillReferenceAudio ref({/*piper=*/"", /*cache_size=*/3});
         ref.put_for_test("a", make_contour(100.0f), {}, 22050);
@@ -51,9 +49,7 @@ int main() {
                "lookup of missing key returns null");
     }
 
-    // ------------------------------------------------------------------
     // 2. Eviction once capacity is exceeded (LRU victim).
-    // ------------------------------------------------------------------
     {
         DrillReferenceAudio ref({/*piper=*/"", /*cache_size=*/2});
         ref.put_for_test("a", make_contour(100.0f), {}, 22050);
@@ -67,9 +63,7 @@ int main() {
         expect(ref.lookup_for_test("c") != nullptr, "entry 'c' survives");
     }
 
-    // ------------------------------------------------------------------
     // 3. MRU bump: a `lookup` on 'a' saves it from being evicted next.
-    // ------------------------------------------------------------------
     {
         DrillReferenceAudio ref({/*piper=*/"", /*cache_size=*/2});
         ref.put_for_test("a", make_contour(100.0f), {}, 22050);
@@ -85,9 +79,7 @@ int main() {
         expect(ref.lookup_for_test("c") != nullptr, "newly inserted 'c' present");
     }
 
-    // ------------------------------------------------------------------
     // 4. cache_size == 0 disables the cache entirely.
-    // ------------------------------------------------------------------
     {
         DrillReferenceAudio ref({/*piper=*/"", /*cache_size=*/0});
         ref.put_for_test("a", make_contour(100.0f), {}, 22050);
@@ -97,9 +89,7 @@ int main() {
                "disabled cache never reports a hit");
     }
 
-    // ------------------------------------------------------------------
     // 5. MRU ordering is observable via cache_keys_for_test.
-    // ------------------------------------------------------------------
     {
         DrillReferenceAudio ref({/*piper=*/"", /*cache_size=*/3});
         ref.put_for_test("a", make_contour(100.0f), {}, 22050);

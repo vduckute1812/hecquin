@@ -42,5 +42,11 @@ bool piper_speak_and_play(const std::string& text,
 
 bool piper_speak_and_play_streaming(const std::string& text,
                                     const std::string& model_path) {
-    return hecquin::tts::speak_and_play_streaming(text, model_path);
+    return hecquin::tts::speak_and_play_streaming(text, model_path, nullptr);
+}
+
+bool piper_speak_and_play_streaming(const std::string& text,
+                                    const std::string& model_path,
+                                    const std::atomic<bool>* abort_flag) {
+    return hecquin::tts::speak_and_play_streaming(text, model_path, abort_flag);
 }

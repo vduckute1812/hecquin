@@ -92,7 +92,7 @@ int main() {
             }
         }
     }
-    // ---- chunk_lines ---------------------------------------------------------
+    // chunk_lines
     {
         const auto c = chunk_lines("", 100);
         if (!c.empty()) return fail("chunk_lines empty input");

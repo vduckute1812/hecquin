@@ -8,6 +8,7 @@
 #include "actions/TopicSearchAction.hpp"
 #include "common/StringUtils.hpp"
 
+#include <array>
 #include <regex>
 #include <sstream>
 #include <string>
@@ -146,6 +147,48 @@ LocalIntentMatcherConfig::make_from_learning(const LearningConfig& cfg) {
 LocalIntentMatcher::LocalIntentMatcher(LocalIntentMatcherConfig cfg)
     : cfg_(std::move(cfg)) {}
 
+namespace {
+
+// Single-regex → fixed-action rule.  Table order = firing priority once
+// the parametric branches (device verb/target + music cancel/pause/
+// resume/play) have run; those keep bespoke handling outside the table.
+struct SimpleRule {
+    const std::regex Compiled::* pattern;
+    Action (*build)(const std::string& trimmed);
+};
+
+const std::array<SimpleRule, 5> kSimpleRules = {{
+    {&Compiled::lesson_start, [](const std::string& t) {
+        LessonModeToggleAction a;
+        a.enable = true;
+        a.reply = "English lesson mode on. Say a sentence and I will help.";
+        return a.into_action(t);
+    }},
+    {&Compiled::lesson_end, [](const std::string& t) {
+        LessonModeToggleAction a;
+        a.enable = false;
+        a.reply = "Lesson mode off.";
+        return a.into_action(t);
+    }},
+    {&Compiled::drill_start, [](const std::string& t) {
+        DrillModeToggleAction a;
+        a.enable = true;
+        a.reply = "Pronunciation drill on. Repeat after me.";
+        return a.into_action(t);
+    }},
+    {&Compiled::drill_end, [](const std::string& t) {
+        DrillModeToggleAction a;
+        a.enable = false;
+        a.reply = "Drill mode off.";
+        return a.into_action(t);
+    }},
+    {&Compiled::story, [](const std::string& t) {
+        return TopicSearchAction{}.into_action(t);
+    }},
+}};
+
+} // namespace
+
 std::optional<Action> LocalIntentMatcher::match(const std::string& transcript) const {
     const std::string trimmed = trim_copy(transcript);
     const std::string normalized = to_lower_copy(trimmed);
@@ -153,34 +196,17 @@ std::optional<Action> LocalIntentMatcher::match(const std::string& transcript) c
 
     const Compiled& p = cached_compile(cfg_);
 
-    if (std::regex_search(normalized, p.lesson_start)) {
-        LessonModeToggleAction a;
-        a.enable = true;
-        a.reply = "English lesson mode on. Say a sentence and I will help.";
-        return a.into_action(trimmed);
+    // Lesson + drill toggles fire before any parametric branch; their
+    // patterns are highly specific and cannot be confused with the
+    // device or music regexes.  Run those first via the table.
+    for (std::size_t i = 0; i < 4; ++i) {  // lesson_start/end + drill_start/end
+        const auto& rule = kSimpleRules[i];
+        if (std::regex_search(normalized, p.*rule.pattern)) {
+            return rule.build(trimmed);
+        }
     }
 
-    if (std::regex_search(normalized, p.lesson_end)) {
-        LessonModeToggleAction a;
-        a.enable = false;
-        a.reply = "Lesson mode off.";
-        return a.into_action(trimmed);
-    }
-
-    if (std::regex_search(normalized, p.drill_start)) {
-        DrillModeToggleAction a;
-        a.enable = true;
-        a.reply = "Pronunciation drill on. Repeat after me.";
-        return a.into_action(trimmed);
-    }
-
-    if (std::regex_search(normalized, p.drill_end)) {
-        DrillModeToggleAction a;
-        a.enable = false;
-        a.reply = "Drill mode off.";
-        return a.into_action(trimmed);
-    }
-
+    // Device — needs the captured verb + target groups.
     std::smatch m;
     if (std::regex_search(normalized, m, p.device)) {
         const std::string verb   = to_lower_copy(trim_copy(std::string(m[1].first, m[1].second)));
@@ -192,27 +218,31 @@ std::optional<Action> LocalIntentMatcher::match(const std::string& transcript) c
         return DeviceAction{power, device}.into_action(trimmed);
     }
 
-    if (std::regex_search(normalized, p.story)) {
-        return TopicSearchAction{}.into_action(trimmed);
+    // Story — single-regex fixed-action; runs *after* device because we
+    // never want a "story" key word inside a device verb to swallow it.
+    {
+        const auto& rule = kSimpleRules[4];
+        if (std::regex_search(normalized, p.*rule.pattern)) {
+            return rule.build(trimmed);
+        }
     }
 
-    // Cancel / pause / resume must win over the "open music" pattern so
-    // phrasings like "stop music" can't accidentally be matched as a
-    // reopen by a future looser `music_pattern`.  Pause / resume are
-    // also placed ahead of `music` (not just `music_cancel`) for the
-    // same reason.
-    if (std::regex_search(normalized, p.music_cancel)) {
-        return MusicAction::cancel(trimmed);
-    }
-    if (std::regex_search(normalized, p.music_pause)) {
-        return MusicAction::pause(trimmed);
-    }
-    if (std::regex_search(normalized, p.music_resume)) {
-        return MusicAction::resume(trimmed);
-    }
-
-    if (std::regex_search(normalized, p.music)) {
-        return MusicAction::prompt(trimmed);
+    // Cancel / pause / resume must fire ahead of the "open music" pattern
+    // so phrasings like "stop music" can't be mis-routed as a reopen by a
+    // future looser `music_pattern`.  Each builds a different factory, so
+    // they sit in a parallel array rather than the simple-action table.
+    using MusicFactory = Action (*)(std::string);
+    struct MusicRule { const std::regex Compiled::* pattern; MusicFactory build; };
+    static const std::array<MusicRule, 4> kMusicRules = {{
+        {&Compiled::music_cancel, &MusicAction::cancel},
+        {&Compiled::music_pause,  &MusicAction::pause},
+        {&Compiled::music_resume, &MusicAction::resume},
+        {&Compiled::music,        &MusicAction::prompt},
+    }};
+    for (const auto& rule : kMusicRules) {
+        if (std::regex_search(normalized, p.*rule.pattern)) {
+            return rule.build(trimmed);
+        }
     }
 
     return std::nullopt;

@@ -64,10 +64,8 @@ int main() {
 
     constexpr int kDim = 4;
 
-    // ------------------------------------------------------------------
     // Build a tmp LearningStore with two documents containing long bodies
     // so we can observe RAG-context truncation.
-    // ------------------------------------------------------------------
     const std::string db_path = make_tmp_db();
     if (db_path.empty()) return fail("cannot allocate tmp db path");
 
@@ -99,10 +97,8 @@ int main() {
             return fail("upsert beta");
     }
 
-    // ------------------------------------------------------------------
     // Embedding client backed by a fake HTTP — it always returns the same
     // unit vector so `query_top_k` finds our docs deterministically.
-    // ------------------------------------------------------------------
     StaticHttp embed_http;
     embed_http.canned = {200, R"({"data":[{"embedding":[1.0,0.0,0.0,0.0]}]})"};
 
@@ -116,10 +112,8 @@ int main() {
     RetrievalService retrieval(store, embed);
     ProgressTracker progress(store, "lesson");
 
-    // ------------------------------------------------------------------
     // Fake chat response — one canonical tutor reply.  The processor
     // parses "You said / Better / Reason".
-    // ------------------------------------------------------------------
     StaticHttp chat_http;
     chat_http.canned = {200,
         R"({"choices":[{"message":{"role":"assistant","content":)"
@@ -138,9 +132,7 @@ int main() {
     EnglishTutorProcessor tutor(chat_cfg, retrieval, progress, tcfg);
     tutor.set_http_client_for_test(&chat_http);
 
-    // ------------------------------------------------------------------
     // 1. Happy path: tutor correctly parses the canned reply.
-    // ------------------------------------------------------------------
     {
         const Action a = tutor.process("i has book");
         if (a.kind != ActionKind::EnglishLesson)
@@ -151,13 +143,11 @@ int main() {
             return fail("reply should surface the 'Reason:' explanation");
     }
 
-    // ------------------------------------------------------------------
     // 2. RAG-context truncation: the chat body built by the processor
     //    must not include the full 5 kB documents — we capped at 200.
     //    Concretely the JSON body should weigh in at << 5 kB of repeated
     //    'a' / 'b' characters, and the sum of the 'a' run and 'b' run
     //    must respect the cap.
-    // ------------------------------------------------------------------
     {
         const std::string& body = chat_http.last_body;
         if (body.empty()) return fail("chat body was not captured");
@@ -181,11 +171,9 @@ int main() {
                         "retrieval may have returned nothing");
     }
 
-    // ------------------------------------------------------------------
     // 3. Transport-level failure: processor returns a graceful fallback
     //    instead of crashing.  nullopt from the client simulates a
     //    timeout or DNS failure.
-    // ------------------------------------------------------------------
     {
         class DropHttp final : public hecquin::ai::IHttpClient {
         public:
@@ -203,10 +191,8 @@ int main() {
             return fail("transport failure reply missing 'could not reach'");
     }
 
-    // ------------------------------------------------------------------
     // 4. Non-2xx response: return a short, spoken-safe bucket phrase
     //    (shared with ChatClient via ai::HttpReplyBuckets).
-    // ------------------------------------------------------------------
     {
         StaticHttp err;
         err.canned = {500, R"({"error":"boom"})"};
@@ -217,9 +203,7 @@ int main() {
             return fail("5xx reply should route through short_reply_for_status");
     }
 
-    // ------------------------------------------------------------------
     // 5. Unparseable reply: processor must not crash.
-    // ------------------------------------------------------------------
     {
         StaticHttp junk;
         junk.canned = {200, R"({"oops": true})"};

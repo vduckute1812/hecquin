@@ -31,28 +31,30 @@ Action MusicSession::handle(const std::string& query) {
     std::cout << "[music] playing: " << track->title
               << "  (" << track->url << ")" << std::endl;
 
+    start_playback_thread_(*track);
+
+    return MusicAction::playback(trimmed, /*ok=*/true, track->title);
+}
+
+void MusicSession::start_playback_thread_(const MusicTrack& track) {
     // Hand playback off to a background thread so the listener loop can
     // keep capturing voice and route subsequent commands ("stop music",
     // "pause music", …) while the song streams.  Any in-flight song
     // from a previous `handle()` call is aborted+joined first; only one
     // song plays at a time.
-    {
-        std::lock_guard<std::mutex> lk(thread_mu_);
-        abort_locked_();
+    std::lock_guard<std::mutex> lk(thread_mu_);
+    abort_locked_();
 
-        playing_.store(true, std::memory_order_release);
-        playback_thread_ = std::thread([this, t = *track]() {
-            // Provider failures land in stderr inside the provider
-            // itself; the user has already heard the "Now playing …"
-            // TTS reply by the time `play()` is called, so a streaming
-            // failure mid-song just shortens the song.
-            const bool ok = provider_.play(t);
-            (void) ok;
-            playing_.store(false, std::memory_order_release);
-        });
-    }
-
-    return MusicAction::playback(trimmed, /*ok=*/true, track->title);
+    playing_.store(true, std::memory_order_release);
+    playback_thread_ = std::thread([this, t = track]() {
+        // Provider failures land in stderr inside the provider itself;
+        // the user has already heard the "Now playing …" TTS reply by
+        // the time `play()` is called, so a streaming failure mid-song
+        // just shortens the song.
+        const bool ok = provider_.play(t);
+        (void) ok;
+        playing_.store(false, std::memory_order_release);
+    });
 }
 
 void MusicSession::abort() {

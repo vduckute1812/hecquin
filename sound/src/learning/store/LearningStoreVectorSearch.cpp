@@ -25,49 +25,69 @@ namespace hecquin::learning {
 
 namespace store::detail {
 
+namespace {
+
+/**
+ * Read columns 0-5 of a SELECT into a `RetrievedDocument`'s `doc`
+ * field.  Both vec0 and scan paths emit the same six columns
+ * (`d.id, d.source, d.kind, d.title, d.body, d.metadata_json`) before
+ * their per-path distance / embedding column, so this is a single
+ * helper that mirrors that contract.  The caller fills in
+ * `r.distance` from whichever extra column it just bound.
+ */
+RetrievedDocument map_row_to_retrieved(sqlite3_stmt* stmt) {
+    auto str = [&](int col) {
+        const unsigned char* t = sqlite3_column_text(stmt, col);
+        return t ? std::string(reinterpret_cast<const char*>(t)) : std::string();
+    };
+    RetrievedDocument r;
+    r.doc.id            = sqlite3_column_int64(stmt, 0);
+    r.doc.source        = str(1);
+    r.doc.kind          = str(2);
+    r.doc.title         = str(3);
+    r.doc.body          = str(4);
+    r.doc.metadata_json = str(5);
+    return r;
+}
+
+/**
+ * Fast path: sqlite-vec's `vec0` virtual table evaluates the kNN
+ * MATCH ... k clause natively, so the SELECT comes back already
+ * sorted by `v.distance` and pre-trimmed to `k` rows.
+ */
 std::vector<RetrievedDocument>
-query_top_k(sqlite3* db,
-            learning::detail::StatementCache& cache,
-            bool has_vec0,
-            int embedding_dim,
-            const std::vector<float>& embedding,
-            int k) {
+query_top_k_vec0(learning::detail::StatementCache& cache,
+                 const std::vector<float>& embedding,
+                 int k) {
     std::vector<RetrievedDocument> out;
-    if (!db || k <= 0) return out;
-    if (static_cast<int>(embedding.size()) != embedding_dim) {
-        std::cerr << "[LearningStore] query dim mismatch: got " << embedding.size()
-                  << " expected " << embedding_dim << std::endl;
-        return out;
+    auto q = cache.acquire("topk.vec",
+        "SELECT d.id, d.source, d.kind, d.title, d.body, d.metadata_json, v.distance "
+        "FROM vec_documents v JOIN documents d ON d.id = v.rowid "
+        "WHERE v.embedding MATCH ? AND k = ? ORDER BY v.distance;");
+    if (!q) return out;
+    sqlite3_bind_blob(q.get(), 1, embedding.data(),
+                      static_cast<int>(embedding.size() * sizeof(float)),
+                      SQLITE_TRANSIENT);
+    sqlite3_bind_int(q.get(), 2, k);
+    while (sqlite3_step(q.get()) == SQLITE_ROW) {
+        RetrievedDocument r = map_row_to_retrieved(q.get());
+        r.distance = static_cast<float>(sqlite3_column_double(q.get(), 6));
+        out.push_back(std::move(r));
     }
+    return out;
+}
 
-    if (has_vec0) {
-        auto q = cache.acquire("topk.vec",
-            "SELECT d.id, d.source, d.kind, d.title, d.body, d.metadata_json, v.distance "
-            "FROM vec_documents v JOIN documents d ON d.id = v.rowid "
-            "WHERE v.embedding MATCH ? AND k = ? ORDER BY v.distance;");
-        if (!q) return out;
-        sqlite3_bind_blob(q.get(), 1, embedding.data(),
-                          static_cast<int>(embedding.size() * sizeof(float)),
-                          SQLITE_TRANSIENT);
-        sqlite3_bind_int(q.get(), 2, k);
-        while (sqlite3_step(q.get()) == SQLITE_ROW) {
-            RetrievedDocument r;
-            r.doc.id = sqlite3_column_int64(q.get(), 0);
-            auto str = [&](int col) {
-                const unsigned char* t = sqlite3_column_text(q.get(), col);
-                return t ? std::string(reinterpret_cast<const char*>(t)) : std::string();
-            };
-            r.doc.source = str(1);
-            r.doc.kind = str(2);
-            r.doc.title = str(3);
-            r.doc.body = str(4);
-            r.doc.metadata_json = str(5);
-            r.distance = static_cast<float>(sqlite3_column_double(q.get(), 6));
-            out.push_back(std::move(r));
-        }
-        return out;
-    }
-
+/**
+ * Fallback path when `vec0` is unavailable: scan every embedding row,
+ * compute cosine distance in C++, and keep the closest `k` via a
+ * max-heap.  The heap's worst-case cost is O(N log k); fine at the
+ * corpus sizes we ship without `vec0`.
+ */
+std::vector<RetrievedDocument>
+query_top_k_scan(learning::detail::StatementCache& cache,
+                 const std::vector<float>& embedding,
+                 int k) {
+    std::vector<RetrievedDocument> out;
     auto scan = cache.acquire("topk.scan",
         "SELECT d.id, d.source, d.kind, d.title, d.body, d.metadata_json, v.embedding "
         "FROM vec_documents v JOIN documents d ON d.id = v.rowid;");
@@ -97,17 +117,7 @@ query_top_k(sqlite3* db,
         if (vn < 1e-9) continue;
         const float distance = static_cast<float>(1.0 - dot / (q_norm * vn));
 
-        RetrievedDocument r;
-        r.doc.id = sqlite3_column_int64(scan.get(), 0);
-        auto str = [&](int col) {
-            const unsigned char* t = sqlite3_column_text(scan.get(), col);
-            return t ? std::string(reinterpret_cast<const char*>(t)) : std::string();
-        };
-        r.doc.source = str(1);
-        r.doc.kind = str(2);
-        r.doc.title = str(3);
-        r.doc.body = str(4);
-        r.doc.metadata_json = str(5);
+        RetrievedDocument r = map_row_to_retrieved(scan.get());
         r.distance = distance;
 
         if (static_cast<int>(heap.size()) < k) {
@@ -124,6 +134,26 @@ query_top_k(sqlite3* db,
     }
     std::reverse(out.begin(), out.end());
     return out;
+}
+
+} // namespace
+
+std::vector<RetrievedDocument>
+query_top_k(sqlite3* db,
+            learning::detail::StatementCache& cache,
+            bool has_vec0,
+            int embedding_dim,
+            const std::vector<float>& embedding,
+            int k) {
+    if (!db || k <= 0) return {};
+    if (static_cast<int>(embedding.size()) != embedding_dim) {
+        std::cerr << "[LearningStore] query dim mismatch: got " << embedding.size()
+                  << " expected " << embedding_dim << std::endl;
+        return {};
+    }
+    return has_vec0
+        ? query_top_k_vec0(cache, embedding, k)
+        : query_top_k_scan(cache, embedding, k);
 }
 
 } // namespace store::detail

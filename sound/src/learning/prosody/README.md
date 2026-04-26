@@ -9,7 +9,8 @@ reference via banded semitone DTW plus a final-direction rule.
 | File | Purpose |
 |---|---|
 | `PitchTracker.hpp/cpp` | YIN implementation. `track(pcm) → PitchContour { f0_hz, rms, frame_hop_ms, sample_rate }`. `f0 = 0` marks unvoiced frames. `PitchTrackerConfig` is env-free, passed at construction. |
-| `IntonationScorer.hpp/cpp` | Semitone DTW between reference and candidate contours + direction rule (rising / falling / flat) on the final segment. Returns a `0..100` score with optional `reason` for mismatched contours. |
+| `Dtw.hpp/cpp` | `dtw_mean_abs_banded(a, b, band)` — pure numeric helper (banded Sakoe–Chiba DTW with rolling rows, `O(min(N,M))` memory). Independently testable; lifted out of `IntonationScorer.cpp` so the scorer no longer hides the routine in an anonymous namespace. |
+| `IntonationScorer.hpp/cpp` | Semitone DTW (via `Dtw.hpp`) between reference and candidate contours + direction rule (rising / falling / flat) on the final segment. Returns a `0..100` score with optional `reason` for mismatched contours. |
 
 ## How the drill uses them
 
@@ -26,6 +27,7 @@ user PCM (16 kHz Whisper)
 
 - `tests/test_pitch_tracker.cpp` — YIN on synthetic sine waves at several rates.
 - `tests/test_intonation_scorer.cpp` — DTW + direction rule on reference / candidate pairs.
+- `tests/test_dtw_banded.cpp` — `dtw_mean_abs_banded` on identical / shift-by-one / divergent inputs and the empty-input edge case.
 
 ## Notes
 

@@ -45,11 +45,9 @@ void append_peak_frames(Emissions& e, std::size_t vocab_size, int peak_token,
 } // namespace
 
 int main() {
-    // ------------------------------------------------------------------
     // Plan for the target sentence "hi bye" — two words, two phonemes
     // each.  Vocab ids match PhonemeTypes convention: 0 = blank, 10..12
     // are our made-up phoneme ids.
-    // ------------------------------------------------------------------
     G2PResult plan;
     {
         WordPhonemes hi;  hi.word  = "hi";
@@ -59,7 +57,6 @@ int main() {
         plan.words = {hi, bye};
     }
 
-    // ------------------------------------------------------------------
     // Emissions: 12-frame utterance where "hi" is clean (high posterior on
     // the target tokens) and "bye" is mispronounced — the model never
     // decides on the right phoneme so the posterior on 12/11 is weak.
@@ -70,7 +67,6 @@ int main() {
     //   frame  6..8  : noisy b     (weak peak on 12, close to floor)
     //   frame  8..10 : noisy aɪ    (weak peak on 11, close to floor)
     //   frame 10..12 : trailing blank
-    // ------------------------------------------------------------------
     constexpr std::size_t kVocab = 16;
     Emissions emissions;
     emissions.blank_id = 0;
@@ -82,10 +78,8 @@ int main() {
     append_peak_frames(emissions, kVocab, /*tok*/ 12, /*frames*/ 2, -9.00f, -10.0f);
     append_peak_frames(emissions, kVocab, /*tok*/ 11, /*frames*/ 2, -9.00f, -10.0f);
 
-    // ------------------------------------------------------------------
     // Wire up the processor with a fake phoneme model that returns those
     // emissions verbatim.  No store, no progress tracker, no Piper.
-    // ------------------------------------------------------------------
     AppConfig app_cfg;
     PronunciationDrillProcessor drill(app_cfg,
                                       /*store=*/nullptr,
@@ -101,10 +95,8 @@ int main() {
     // issue string — that's explicitly asserted below.
     drill.set_reference_for_test("hi bye", plan, {});
 
-    // ------------------------------------------------------------------
     // Score — PCM is irrelevant because the fake model ignores it, but the
     // drill still passes it into the intonation tracker, so length > 0.
-    // ------------------------------------------------------------------
     const std::vector<float> user_pcm(16000, 0.0f);  // 1 s of silence
     const Action a = drill.score(user_pcm, "hi bye");
 

@@ -13,6 +13,7 @@ add_library(hecquin_piper_speech STATIC
     ${HECQUIN_SOUND_SRC_ROOT}/tts/wav/WavReader.cpp
     ${HECQUIN_SOUND_SRC_ROOT}/tts/backend/PiperSpawn.cpp
     ${HECQUIN_SOUND_SRC_ROOT}/tts/backend/PiperPipeBackend.cpp
+    ${HECQUIN_SOUND_SRC_ROOT}/tts/backend/PiperWaitStatus.cpp
     ${HECQUIN_SOUND_SRC_ROOT}/tts/backend/PiperShellBackend.cpp
     ${HECQUIN_SOUND_SRC_ROOT}/tts/backend/PiperFallbackBackend.cpp
     ${HECQUIN_SOUND_SRC_ROOT}/tts/playback/SdlAudioDevice.cpp

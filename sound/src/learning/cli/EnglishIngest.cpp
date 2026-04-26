@@ -1,20 +1,15 @@
 #include "ai/IHttpClient.hpp"
 #include "ai/LoggingHttpClient.hpp"
+#include "cli/DefaultPaths.hpp"
 #include "config/AppConfig.hpp"
 #include "learning/EmbeddingClient.hpp"
 #include "learning/Ingestor.hpp"
+#include "learning/cli/StoreApiSink.hpp"
 #include "learning/store/LearningStore.hpp"
 
 #include <charconv>
 #include <iostream>
 #include <string>
-
-#ifndef DEFAULT_CONFIG_PATH
-#define DEFAULT_CONFIG_PATH ConfigStore::kDefaultPath
-#endif
-#ifndef DEFAULT_PROMPTS_DIR
-#define DEFAULT_PROMPTS_DIR nullptr
-#endif
 
 namespace {
 
@@ -94,12 +89,7 @@ int main(int argc, char** argv) {
     // dashboard can chart ingestion traffic alongside live tutor traffic.
     hecquin::ai::CurlHttpClient    raw_http;
     hecquin::ai::LoggingHttpClient embed_http(raw_http, "embedding",
-        [&store](const hecquin::ai::ApiCallRecord& r) {
-            store.record_api_call(r.provider, r.endpoint, r.method,
-                                  r.status, r.latency_ms,
-                                  r.request_bytes, r.response_bytes,
-                                  r.ok, r.error);
-        });
+        hecquin::learning::cli::make_store_api_call_sink(store));
 
     hecquin::learning::EmbeddingClient embedder(app.ai, embed_http);
     if (!embedder.ready()) {

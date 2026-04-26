@@ -36,14 +36,11 @@ struct YouTubeMusicConfig {
 
 /**
  * `yt-dlp` + `ffmpeg` powered back-end.  `search()` runs a single
- * `ytsearch1:` query and parses the title / URL via
- * `music::yt::parse_search_output`.  `play()` builds the pipeline shell
- * command via `music::yt::build_playback_command` and dispatches the
- * read-loop / SDL lifecycle to `music::yt::YtPlaybackPipeline`.
- *
- * Auth: if `cookies_file` is non-empty and exists, both subprocesses get
- * `--cookies <path>` (yt-dlp) so a signed-in Premium account can skip
- * ads and get higher bitrate.
+ * `ytsearch1:` query parsed via `music::yt::parse_search_output`;
+ * `play()` builds the pipeline shell command via
+ * `music::yt::build_playback_command` and delegates the read-loop / SDL
+ * lifecycle to `music::yt::YtPlaybackPipeline`.  Premium auth is wired
+ * via `YouTubeMusicConfig::cookies_file`.
  */
 class YouTubeMusicProvider final : public MusicProvider {
 public:
@@ -58,6 +55,7 @@ public:
     void stop() override;
     void pause() override;
     void resume() override;
+    void set_gain_target(float linear, int ramp_ms) override;
 
     const YouTubeMusicConfig& config() const { return cfg_; }
 

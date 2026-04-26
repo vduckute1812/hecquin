@@ -1,5 +1,6 @@
 #pragma once
 
+#include <atomic>
 #include <string>
 
 namespace hecquin::tts {
@@ -22,8 +23,15 @@ bool speak_and_play(const std::string& text, const std::string& model_path);
  * Streaming: pipe Piper output directly into SDL playback as soon as
  * the first samples arrive.  Falls back to `speak_and_play` on pipe
  * setup failure so callers always get an end-to-end result.
+ *
+ * `abort_flag` (optional, may be null) is polled per sample-callback;
+ * when true the read loop returns false, the player is stopped
+ * immediately (audio cut mid-sentence), and the spawn handle is reaped
+ * so the function returns to the caller without waiting for piper to
+ * close its pipe naturally.
  */
 bool speak_and_play_streaming(const std::string& text,
-                              const std::string& model_path);
+                              const std::string& model_path,
+                              const std::atomic<bool>* abort_flag = nullptr);
 
 } // namespace hecquin::tts

@@ -11,6 +11,8 @@
 #include <iostream>
 #include <string>
 #include <thread>
+#include <tuple>
+#include <utility>
 
 namespace detail {
 
@@ -28,6 +30,68 @@ int auto_threads() {
     const unsigned int hw = std::thread::hardware_concurrency();
     if (hw == 0) return 2;
     return static_cast<int>(std::max(2u, hw / 2u));
+}
+
+/**
+ * Build the `whisper_full_params` block from the engine's runtime
+ * config.  All knobs that used to be inlined inside `transcribe()` live
+ * here so the inference call site stays a one-liner.
+ */
+whisper_full_params build_wparams(const WhisperConfig& cfg) {
+    const whisper_sampling_strategy strategy = (cfg.beam_size > 0)
+        ? WHISPER_SAMPLING_BEAM_SEARCH
+        : WHISPER_SAMPLING_GREEDY;
+    whisper_full_params wparams = whisper_full_default_params(strategy);
+    wparams.print_progress   = false;
+    wparams.print_special    = false;
+    wparams.print_realtime   = false;
+    wparams.print_timestamps = false;
+    // Language: "auto" asks Whisper to detect.  Any other value is passed
+    // through verbatim; unknown codes are silently coerced to English by
+    // whisper.cpp so mistypes degrade gracefully.
+    wparams.language = (cfg.language == "auto") ? nullptr : cfg.language.c_str();
+    wparams.n_threads = cfg.n_threads;
+    if (cfg.beam_size > 0) {
+        wparams.beam_search.beam_size = cfg.beam_size;
+    }
+    wparams.suppress_blank  = true;
+    wparams.suppress_nst    = true;
+    wparams.no_speech_thold = cfg.no_speech_prob_max;
+    wparams.logprob_thold   = -1.0f;
+    return wparams;
+}
+
+/**
+ * Walk every segment whisper.cpp produced for the last `whisper_full`
+ * call: print the per-segment line when not suppressed, accumulate the
+ * joined transcript, and track the worst per-segment no-speech
+ * probability so the post-filter can reject hallucinations.
+ */
+std::pair<std::string, float> collect_segments(whisper_context* ctx,
+                                               const WhisperConfig& cfg) {
+    std::string joined;
+    float worst_no_speech_prob = 0.0f;
+
+    const int n_segments = whisper_full_n_segments(ctx);
+    if (!cfg.suppress_segment_print) {
+        std::cout << "📝 Result:" << std::endl;
+    }
+    for (int i = 0; i < n_segments; ++i) {
+        const char* text = whisper_full_get_segment_text(ctx, i);
+        const float p_ns = whisper_full_get_segment_no_speech_prob(ctx, i);
+        if (p_ns > worst_no_speech_prob) {
+            worst_no_speech_prob = p_ns;
+        }
+        if (text && std::strlen(text) > 0) {
+            if (!cfg.suppress_segment_print) {
+                std::cout << "  > " << text
+                          << "   (no_speech=" << p_ns << ")" << std::endl;
+            }
+            if (!joined.empty()) joined += ' ';
+            joined += text;
+        }
+    }
+    return {std::move(joined), worst_no_speech_prob};
 }
 
 } // namespace
@@ -80,56 +144,13 @@ std::string WhisperEngine::transcribe(const std::vector<float>& samples) {
     std::cout << "🔍 Recognizing..." << std::endl;
     const auto t0 = std::chrono::steady_clock::now();
 
-    const whisper_sampling_strategy strategy = (cfg_.beam_size > 0)
-        ? WHISPER_SAMPLING_BEAM_SEARCH
-        : WHISPER_SAMPLING_GREEDY;
-    whisper_full_params wparams = whisper_full_default_params(strategy);
-    wparams.print_progress   = false;
-    wparams.print_special    = false;
-    wparams.print_realtime   = false;
-    wparams.print_timestamps = false;
-    // Language: "auto" asks Whisper to detect.  Any other value is passed
-    // through verbatim; unknown codes are silently coerced to English by
-    // whisper.cpp so mistypes degrade gracefully.
-    if (cfg_.language == "auto") {
-        wparams.language = nullptr;
-    } else {
-        wparams.language = cfg_.language.c_str();
-    }
-    wparams.n_threads = cfg_.n_threads;
-    if (cfg_.beam_size > 0) {
-        wparams.beam_search.beam_size = cfg_.beam_size;
-    }
-
-    wparams.suppress_blank  = true;
-    wparams.suppress_nst    = true;
-    wparams.no_speech_thold = cfg_.no_speech_prob_max;
-    wparams.logprob_thold   = -1.0f;
+    whisper_full_params wparams = build_wparams(cfg_);
 
     std::string joined;
     float worst_no_speech_prob = 0.0f;
-    if (whisper_full(ctx, wparams, samples.data(), static_cast<int>(samples.size())) == 0) {
-        const int n_segments = whisper_full_n_segments(ctx);
-        if (!cfg_.suppress_segment_print) {
-            std::cout << "📝 Result:" << std::endl;
-        }
-        for (int i = 0; i < n_segments; ++i) {
-            const char* text = whisper_full_get_segment_text(ctx, i);
-            const float p_ns = whisper_full_get_segment_no_speech_prob(ctx, i);
-            if (p_ns > worst_no_speech_prob) {
-                worst_no_speech_prob = p_ns;
-            }
-            if (text && std::strlen(text) > 0) {
-                if (!cfg_.suppress_segment_print) {
-                    std::cout << "  > " << text
-                              << "   (no_speech=" << p_ns << ")" << std::endl;
-                }
-                if (!joined.empty()) {
-                    joined += ' ';
-                }
-                joined += text;
-            }
-        }
+    if (whisper_full(ctx, wparams, samples.data(),
+                     static_cast<int>(samples.size())) == 0) {
+        std::tie(joined, worst_no_speech_prob) = collect_segments(ctx, cfg_);
     }
     std::cout << std::endl;
 

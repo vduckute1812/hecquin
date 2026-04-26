@@ -104,16 +104,9 @@ const pronunciation::PhonemeVocab& PronunciationDrillProcessor::vocab() const {
     return scoring_.vocab();
 }
 
-bool PronunciationDrillProcessor::load() {
-    const bool model_ok = scoring_.load();
-
+std::vector<std::string> PronunciationDrillProcessor::resolve_sentence_pool_() {
     // Sentences: try config file first, then DB documents(kind='drill'), then fallback.
     std::vector<std::string> pool;
-    if (!picker_.empty()) {
-        // Pool was pre-injected (tests) — keep it as-is.
-        loaded_ = model_ok;
-        return model_ok;
-    }
     if (!app_cfg_.pronunciation.drill_sentences_path.empty()) {
         pool = load_sentences_from_file(app_cfg_.pronunciation.drill_sentences_path);
     }
@@ -128,13 +121,28 @@ bool PronunciationDrillProcessor::load() {
     std::random_device rd;
     std::mt19937 rng(rd());
     std::shuffle(pool.begin(), pool.end(), rng);
+    return pool;
+}
 
+void PronunciationDrillProcessor::prime_picker_(std::vector<std::string> pool) {
     // The picker's G2P reference is the one the scoring pipeline owns —
     // we cannot access it directly, so we phonemize via a temporary G2P
     // built against the same vocab.  This matches the pre-refactor
     // behaviour where the index was built off a fresh G2P under `load()`.
     pronunciation::G2P index_g2p(scoring_.vocab());
     picker_.load(std::move(pool), &index_g2p);
+}
+
+bool PronunciationDrillProcessor::load() {
+    const bool model_ok = scoring_.load();
+
+    if (!picker_.empty()) {
+        // Pool was pre-injected (tests) — keep it as-is.
+        loaded_ = model_ok;
+        return model_ok;
+    }
+
+    prime_picker_(resolve_sentence_pool_());
 
     loaded_ = model_ok;
     return model_ok;
@@ -147,7 +155,11 @@ bool PronunciationDrillProcessor::available() const {
 std::string PronunciationDrillProcessor::pick_and_announce() {
     current_reference_ = picker_.next();
     if (current_reference_.empty()) return {};
-    std::cout << "🎯 Reference: " << current_reference_ << std::endl;
+    if (announce_cb_) {
+        announce_cb_(current_reference_);
+    } else {
+        std::cout << "🎯 Reference: " << current_reference_ << std::endl;
+    }
     current_reference_contour_ = reference_.announce(current_reference_);
     return current_reference_;
 }

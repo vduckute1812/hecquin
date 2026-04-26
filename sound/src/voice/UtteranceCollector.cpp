@@ -124,7 +124,14 @@ bool UtteranceCollector::detect_voice_(float frame_rms, bool window_ready,
     if (!collecting && cfg_.auto_calibrate && !tracker_.calibrated()) {
         return false;
     }
-    const float thr = collecting ? dynamic_continue_thr_ : dynamic_start_thr_;
+    float thr = collecting ? dynamic_continue_thr_ : dynamic_start_thr_;
+    // While the assistant is speaking the mic captures the speaker
+    // bleed; raise the bar so only real (louder-than-bleed) speech
+    // crosses it and triggers ducking / TTS abort.  No effect when the
+    // boost is 1.0.
+    if (tts_active_.load(std::memory_order_acquire)) {
+        thr *= std::max(1.0f, cfg_.tts_threshold_boost);
+    }
     return frame_rms > thr;
 }
 
@@ -167,6 +174,56 @@ void UtteranceCollector::announce_recording_complete_(EndReason reason) const {
     }
 }
 
+UtteranceCollector::TickResult UtteranceCollector::poll_tick_(
+    CollectedUtterance& u, bool& collecting,
+    std::vector<float>& vad_window) {
+    capture_.snapshotRecent(static_cast<std::size_t>(cfg_.vad_window_samples),
+                            vad_window);
+
+    const bool window_ready =
+        vad_window.size() >= static_cast<std::size_t>(cfg_.vad_window_samples);
+    const float frame_rms = window_ready
+                                ? rms(vad_window, 0, vad_window.size())
+                                : 0.0f;
+
+    if (window_ready) update_floor_estimate_(frame_rms, collecting);
+    recompute_thresholds_();
+    announce_calibration_once_();
+    log_vad_debug_(frame_rms, collecting);
+
+    const bool has_voice = detect_voice_(frame_rms, window_ready, collecting);
+
+    // Notify subscribers (barge-in controller) on per-frame ON/OFF edges.
+    // The atomic also publishes the current state so off-thread readers
+    // don't have to subscribe.
+    const bool prev_voice = voice_active_.load(std::memory_order_acquire);
+    if (has_voice != prev_voice) {
+        voice_active_.store(has_voice, std::memory_order_release);
+        if (voice_state_cb_) voice_state_cb_(has_voice);
+    }
+    // Frame-cadence tick (every poll iteration, ~50 ms by default) so
+    // deferred actions (e.g. ducking hold timer) fire even when no voice
+    // edge happens this frame.
+    if (frame_cb_) frame_cb_();
+
+    if (has_voice && !collecting) {
+        collecting = true;
+        u = {};
+        std::cout << "🔴 Recording..." << std::endl;
+    }
+
+    if (collecting) {
+        advance_collection_(u, has_voice);
+        const EndReason reason = end_reason_(u);
+        if (reason != EndReason::None) {
+            announce_recording_complete_(reason);
+            return {TickResult::Kind::EmitUtterance};
+        }
+    }
+
+    return {TickResult::Kind::Continue};
+}
+
 std::optional<CollectedUtterance> UtteranceCollector::collect_next() {
     CollectedUtterance u;
     bool collecting = false;
@@ -175,38 +232,14 @@ std::optional<CollectedUtterance> UtteranceCollector::collect_next() {
     vad_window.reserve(static_cast<std::size_t>(cfg_.vad_window_samples));
 
     while (app_running_.load()) {
-        capture_.snapshotRecent(static_cast<std::size_t>(cfg_.vad_window_samples),
-                                vad_window);
-
-        const bool window_ready =
-            vad_window.size() >= static_cast<std::size_t>(cfg_.vad_window_samples);
-        const float frame_rms = window_ready
-                                    ? rms(vad_window, 0, vad_window.size())
-                                    : 0.0f;
-
-        if (window_ready) update_floor_estimate_(frame_rms, collecting);
-        recompute_thresholds_();
-        announce_calibration_once_();
-        log_vad_debug_(frame_rms, collecting);
-
-        const bool has_voice = detect_voice_(frame_rms, window_ready, collecting);
-
-        if (has_voice && !collecting) {
-            collecting = true;
-            u = {};
-            std::cout << "🔴 Recording..." << std::endl;
+        if (poll_tick_(u, collecting, vad_window).kind ==
+            TickResult::Kind::EmitUtterance) {
+            // Snapshot the full buffer here (not in `poll_tick_`) so the
+            // per-tick helper stays free of capture-buffer side effects
+            // and is trivially observable from tests.
+            u.pcm = capture_.snapshotBuffer();
+            return u;
         }
-
-        if (collecting) {
-            advance_collection_(u, has_voice);
-            const EndReason reason = end_reason_(u);
-            if (reason != EndReason::None) {
-                announce_recording_complete_(reason);
-                u.pcm = capture_.snapshotBuffer();
-                return u;
-            }
-        }
-
         capture_.limitBufferSize(cfg_.buffer_max_seconds, cfg_.buffer_keep_seconds);
         std::this_thread::sleep_for(std::chrono::milliseconds(cfg_.poll_interval_ms));
     }

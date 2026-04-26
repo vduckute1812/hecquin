@@ -1,7 +1,9 @@
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 #include <string>
+#include <string_view>
 
 namespace hecquin::common {
 
@@ -80,5 +82,43 @@ inline std::string sanitize_utf8(const std::string& s, char replacement = ' ') {
     }
     return out;
 }
+
+namespace utf8 {
+
+/**
+ * Length (in bytes) of the UTF-8 codepoint that starts with
+ * `first_byte`.  Returns 1..4 for valid lead bytes (or ASCII), and `0`
+ * for a continuation byte (`10xxxxxx`).  Malformed lead bytes are
+ * treated as single-byte to keep the caller making forward progress.
+ */
+inline std::size_t codepoint_length(unsigned char first_byte) {
+    if      ((first_byte & 0x80u) == 0x00u) return 1; // 0xxxxxxx ASCII
+    else if ((first_byte & 0xC0u) == 0x80u) return 0; // continuation
+    else if ((first_byte & 0xE0u) == 0xC0u) return 2;
+    else if ((first_byte & 0xF0u) == 0xE0u) return 3;
+    else if ((first_byte & 0xF8u) == 0xF0u) return 4;
+    return 1;
+}
+
+/** True for UTF-8 continuation bytes (`10xxxxxx`). */
+inline bool is_continuation(unsigned char b) {
+    return (b & 0xC0u) == 0x80u;
+}
+
+/**
+ * Advance `pos` forward over any continuation bytes so it lands on the
+ * next codepoint boundary (or `s.size()`).  Never moves backwards;
+ * always clamps to the end of the buffer.  Useful when slicing a
+ * string at an arbitrary byte offset and you need to avoid splitting
+ * a multi-byte character in half.
+ */
+inline std::size_t align_to_codepoint(std::string_view s, std::size_t pos) {
+    while (pos < s.size() && is_continuation(static_cast<unsigned char>(s[pos]))) {
+        ++pos;
+    }
+    return pos;
+}
+
+} // namespace utf8
 
 } // namespace hecquin::common

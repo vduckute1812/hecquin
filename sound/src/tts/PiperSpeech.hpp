@@ -1,5 +1,6 @@
 #pragma once
 
+#include <atomic>
 #include <cstdint>
 #include <string>
 #include <vector>
@@ -47,3 +48,13 @@ bool piper_speak_and_play(const std::string& text, const std::string& model_path
  */
 bool piper_speak_and_play_streaming(const std::string& text,
                                     const std::string& model_path);
+
+/**
+ * Abortable streaming variant.  When `abort_flag` becomes true the
+ * read loop bails on its next sample callback and the SDL player is
+ * stopped immediately so the user hears the assistant cut off.
+ * `abort_flag == nullptr` is equivalent to the 2-arg form (no abort).
+ */
+bool piper_speak_and_play_streaming(const std::string& text,
+                                    const std::string& model_path,
+                                    const std::atomic<bool>* abort_flag);

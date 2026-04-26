@@ -14,7 +14,7 @@ to `MusicSession::handle` as a song query.
 | `yt/YtDlpCommands.hpp/cpp` | Pure command-string builders (`build_search_command`, `build_playback_command`). No I/O — exercised by `tests/music/test_yt_dlp_commands.cpp`. |
 | `yt/YtDlpSearch.hpp/cpp` | Pure `parse_search_output(stdout) → optional<MusicTrack>`. Handles TAB / `\\t` separators and skips blank preamble lines from `yt-dlp`. Tested by `tests/music/test_yt_dlp_search_parser.cpp`. |
 | `yt/YtPlaybackPipeline.hpp/cpp` | Owns the read loop + `StreamingSdlPlayer` lifecycle for one playback. Builds and manages the `yt-dlp \| ffmpeg` subprocess via `common::Subprocess`. |
-| `MusicSession.hpp/cpp` | Async facade. Searches synchronously, then dispatches `provider.play()` to a private `std::thread`. Exposes `abort / pause / resume` for the mid-song voice intents. The microphone is **not** muted during playback so "stop / pause / continue music" can be heard over the song. |
+| `MusicSession.hpp/cpp` | Async facade. Searches synchronously, then dispatches `provider.play()` to a private `std::thread`. Exposes `abort / pause / resume` for the mid-song voice intents. The microphone is **not** muted during playback so "stop / pause / continue music" can be heard over the song. The thread-lifecycle plumbing (abort prior song → mark playing → spawn → mark done) is factored out into the private `start_playback_thread_(track)` so `handle()` reads as: log → resolve → either build "not found" reply or `start_playback_thread_(track)` + build "playing" reply. |
 | `MusicFactory.hpp/cpp` | Builds a `MusicProvider` from `AppConfig::music`. Unknown `provider` values fall back to YouTube with a warning. |
 
 Wiring into the `VoiceListener` is centralised in

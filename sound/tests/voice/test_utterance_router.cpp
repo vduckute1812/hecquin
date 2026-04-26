@@ -60,9 +60,7 @@ int main() {
     cfg.chat_completions_url = "https://unit.test/chat";
     CommandProcessor commands(cfg, http);
 
-    // ------------------------------------------------------------------
     // 1. Local intent wins even when the listener is in Lesson mode.
-    // ------------------------------------------------------------------
     {
         ListenerMode mode = ListenerMode::Lesson;
         int drill_calls = 0;
@@ -94,9 +92,7 @@ int main() {
                "local match never consults mode callbacks");
     }
 
-    // ------------------------------------------------------------------
     // 2. Drill mode forwards to the drill callback.
-    // ------------------------------------------------------------------
     {
         ListenerMode mode = ListenerMode::Drill;
         int drill_calls = 0;
@@ -127,9 +123,7 @@ int main() {
                "drill callback action is returned");
     }
 
-    // ------------------------------------------------------------------
     // 3. Lesson mode forwards to the tutor callback.
-    // ------------------------------------------------------------------
     {
         ListenerMode mode = ListenerMode::Lesson;
         int drill_calls = 0;
@@ -153,9 +147,7 @@ int main() {
                "tutor callback action is returned");
     }
 
-    // ------------------------------------------------------------------
     // 4. Assistant mode falls through to CommandProcessor::process.
-    // ------------------------------------------------------------------
     {
         ListenerMode mode = ListenerMode::Assistant;
         int drill_calls = 0;
@@ -176,9 +168,7 @@ int main() {
                "fallback carries chat-client reply through");
     }
 
-    // ------------------------------------------------------------------
     // 5. Missing mode callback still falls through cleanly.
-    // ------------------------------------------------------------------
     {
         ListenerMode mode = ListenerMode::Drill;
         UtteranceRouter router(commands, mode, nullptr, nullptr);
@@ -187,9 +177,7 @@ int main() {
                "null drill callback falls through to chat fallback");
     }
 
-    // ------------------------------------------------------------------
     // 6. Music mode forwards to the music callback (query only).
-    // ------------------------------------------------------------------
     {
         ListenerMode mode = ListenerMode::Music;
         int music_calls = 0;
@@ -216,10 +204,8 @@ int main() {
                "music callback returns MusicPlayback action");
     }
 
-    // ------------------------------------------------------------------
     // 7. Local intent still wins in Music mode — "cancel music" must
     //    short-circuit before the music callback is consulted.
-    // ------------------------------------------------------------------
     {
         ListenerMode mode = ListenerMode::Music;
         int music_calls = 0;
@@ -241,11 +227,9 @@ int main() {
                "cancel music yields MusicCancel action");
     }
 
-    // ------------------------------------------------------------------
     // 8. "pause music" / "continue music" also short-circuit to local
     //    intent so they take effect mid-song without going through the
     //    music callback (which would treat them as new song queries).
-    // ------------------------------------------------------------------
     {
         ListenerMode mode = ListenerMode::Music;
         int music_calls = 0;

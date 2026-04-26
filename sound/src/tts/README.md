@@ -11,7 +11,8 @@ single-responsibility files.
 | File | Purpose |
 |---|---|
 | `PiperSpeech.hpp/cpp` | Public facade. Holds the default `IPiperBackend` (pipe → shell fallback) and forwards the speak-and-play entry points to `PlayPipeline`. Keeps the legacy free-function API. |
-| `PlayPipeline.hpp/cpp` | Implementation of `piper_speak_and_play` and `piper_speak_and_play_streaming` — buffered vs streaming SDL playback orchestrated against the `IPiperBackend`. Extracted out of `PiperSpeech.cpp` so the facade stays a true facade. |
+| `PlayPipeline.hpp/cpp` | Implementation of `piper_speak_and_play` and `piper_speak_and_play_streaming` — buffered vs streaming SDL playback orchestrated against the `IPiperBackend`. Extracted out of `PiperSpeech.cpp` so the facade stays a true facade. Player cleanup (stop vs finish + drain + stop) lives in a small `finalize_streaming_player(player, aborted)` helper; Piper exit-status interpretation is delegated to `backend/PiperWaitStatus.hpp`. |
+| `PiperSampleRate.hpp` | Single source of truth for `kPiperSampleRate = 22050` shared by the pipeline, both backends, and `BufferedSdlPlayer`. Replaces the four duplicated `constexpr int kPiperSampleRate = 22050;` definitions that used to drift independently. |
 
 ## Sub-folders
 

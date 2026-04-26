@@ -117,6 +117,7 @@ target_include_directories(hecquin_sound_test_noise_floor_tracker
 hecquin_add_unit_test(hecquin_sound_test_music_side_effects
     ${HECQUIN_SOUND_TEST_SRC_ROOT}/voice/test_music_side_effects.cpp
     ${HECQUIN_SOUND_SRC_ROOT}/voice/MusicSideEffects.cpp
+    ${HECQUIN_SOUND_SRC_ROOT}/voice/AudioBargeInController.cpp
     ${HECQUIN_SOUND_SRC_ROOT}/voice/NoiseFloorTracker.cpp)
 target_include_directories(hecquin_sound_test_music_side_effects
     PRIVATE ${HECQUIN_SOUND_SRC_ROOT})
@@ -137,6 +138,15 @@ target_link_libraries(hecquin_sound_test_utterance_router PRIVATE
     hecquin_voice_pipeline
     hecquin_piper_speech)
 
+# AudioBargeInController: pure coordinator (no SDL, no audio) — drives
+# voice ON/OFF transitions + tick() and asserts the gain-setter /
+# aborter sequencing for ducking / barge-in semantics.
+hecquin_add_unit_test(hecquin_sound_test_audio_barge_in_controller
+    ${HECQUIN_SOUND_TEST_SRC_ROOT}/voice/test_audio_barge_in_controller.cpp
+    ${HECQUIN_SOUND_SRC_ROOT}/voice/AudioBargeInController.cpp)
+target_include_directories(hecquin_sound_test_audio_barge_in_controller
+    PRIVATE ${HECQUIN_SOUND_SRC_ROOT})
+
 # =============================================================================
 # tts/  — hecquin_piper_speech
 # =============================================================================
@@ -154,6 +164,14 @@ hecquin_add_unit_test(hecquin_sound_test_pcm_ring_queue
     ${HECQUIN_SOUND_SRC_ROOT}/tts/playback/PcmRingQueue.cpp)
 target_include_directories(hecquin_sound_test_pcm_ring_queue
     PRIVATE ${HECQUIN_SOUND_SRC_ROOT})
+
+# StreamingSdlPlayer gain-stage helper: drives the static apply_gain
+# math directly without opening an SDL device.  Validates ramp slewing,
+# saturation, and multi-buffer continuity used by the ducking path.
+hecquin_add_unit_test(hecquin_sound_test_streaming_player_gain
+    ${HECQUIN_SOUND_TEST_SRC_ROOT}/tts/test_streaming_player_gain.cpp)
+target_link_libraries(hecquin_sound_test_streaming_player_gain PRIVATE
+    hecquin_piper_speech)
 
 # =============================================================================
 # music/  — hecquin_music
@@ -245,6 +263,11 @@ target_link_libraries(hecquin_sound_test_pitch_tracker PRIVATE hecquin_prosody)
 hecquin_add_unit_test(hecquin_sound_test_intonation_scorer
     ${HECQUIN_SOUND_TEST_SRC_ROOT}/learning/prosody/test_intonation_scorer.cpp)
 target_link_libraries(hecquin_sound_test_intonation_scorer PRIVATE hecquin_prosody)
+
+# Banded DTW numeric helper (identical / shifted / divergent inputs).
+hecquin_add_unit_test(hecquin_sound_test_dtw_banded
+    ${HECQUIN_SOUND_TEST_SRC_ROOT}/learning/prosody/test_dtw_banded.cpp)
+target_link_libraries(hecquin_sound_test_dtw_banded PRIVATE hecquin_prosody)
 
 # ----- learning/ (drill orchestrator + drill subfolder) ----------------------
 # PronunciationDrillProcessor lives at learning/PronunciationDrillProcessor.cpp,

@@ -1,6 +1,7 @@
 #include "tts/backend/PiperShellBackend.hpp"
 
 #include "common/ShellEscape.hpp"
+#include "tts/PiperSampleRate.hpp"
 #include "tts/runtime/PiperRuntime.hpp"
 #include "tts/wav/WavReader.hpp"
 
@@ -18,7 +19,6 @@ namespace hecquin::tts::backend {
 
 namespace {
 
-constexpr int kPiperSampleRate = 22050;
 constexpr const char* kTempWavFilename = "piper_output.wav";
 
 using hecquin::common::posix_sh_single_quote;
@@ -88,7 +88,7 @@ bool PiperShellBackend::synthesize(const std::string& text,
         return false;
     }
     samples_out = std::move(samples);
-    sample_rate_out = parsed_rate > 0 ? parsed_rate : kPiperSampleRate;
+    sample_rate_out = parsed_rate > 0 ? parsed_rate : hecquin::tts::kPiperSampleRate;
     return true;
 }
 
