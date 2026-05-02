@@ -41,8 +41,7 @@ Action CommandProcessor::process(const std::string& transcript) {
 }
 
 std::future<Action> CommandProcessor::process_async(const std::string& transcript) {
-    // NOTE: captures `this`; callers are responsible for keeping the
-    // processor alive until the returned future resolves.
-    return std::async(std::launch::async,
-                      [this, transcript]() { return process(transcript); });
+    return std::async(std::launch::async, [this, transcript]() {
+        return process(transcript);
+    });
 }

@@ -42,6 +42,7 @@ void ProgressReporter::finish_plan(const IngestReport& report, Clock::time_point
               << " — scanned=" << report.files_scanned
               << " ingested=" << report.files_ingested
               << " skipped=" << report.files_skipped
+              << " pruned=" << report.files_pruned
               << " chunks=" << report.chunks_written
               << " failed_chunks=" << report.chunks_failed << std::endl;
 }

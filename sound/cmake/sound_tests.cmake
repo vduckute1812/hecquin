@@ -65,6 +65,12 @@ hecquin_add_unit_test(hecquin_sound_test_config_store
     ${HECQUIN_SOUND_TEST_SRC_ROOT}/config/test_config_store.cpp)
 target_link_libraries(hecquin_sound_test_config_store PRIVATE hecquin_config)
 
+# AppConfig path-resolution: relative paths must anchor at the config dir,
+# absolutes pass through.  Regression for ./dev.sh-vs-direct cwd drift.
+hecquin_add_unit_test(hecquin_sound_test_app_config_path_resolution
+    ${HECQUIN_SOUND_TEST_SRC_ROOT}/config/test_app_config_path_resolution.cpp)
+target_link_libraries(hecquin_sound_test_app_config_path_resolution PRIVATE hecquin_config)
+
 # =============================================================================
 # ai/  — hecquin_ai
 # =============================================================================
@@ -79,6 +85,12 @@ target_link_libraries(hecquin_sound_test_openai_chat PRIVATE hecquin_deps_json)
 hecquin_add_unit_test(hecquin_sound_test_local_intent
     ${HECQUIN_SOUND_TEST_SRC_ROOT}/ai/test_local_intent_matcher.cpp)
 target_link_libraries(hecquin_sound_test_local_intent PRIVATE hecquin_ai)
+
+# CommandProcessor — local/chat parity and process vs process_async contract.
+hecquin_add_unit_test(hecquin_sound_test_command_processor
+    ${HECQUIN_SOUND_TEST_SRC_ROOT}/ai/test_command_processor.cpp
+    ${HECQUIN_SOUND_SRC_ROOT}/ai/CommandProcessor.cpp)
+target_link_libraries(hecquin_sound_test_command_processor PRIVATE hecquin_ai)
 
 # RetryingHttpClient backoff + transient-classification behaviour.
 # Compiled standalone (no hecquin_ai link) so the binary pulls in neither
@@ -209,6 +221,11 @@ hecquin_add_unit_test(hecquin_sound_test_embedding_json
     ${HECQUIN_SOUND_TEST_SRC_ROOT}/learning/test_embedding_client_json.cpp)
 target_link_libraries(hecquin_sound_test_embedding_json PRIVATE hecquin_learning)
 
+# EmbeddingClient stable-failure classification: 401/403/400 must NOT retry.
+hecquin_add_unit_test(hecquin_sound_test_embedding_no_retry_on_403
+    ${HECQUIN_SOUND_TEST_SRC_ROOT}/learning/test_embedding_client_no_retry_on_403.cpp)
+target_link_libraries(hecquin_sound_test_embedding_no_retry_on_403 PRIVATE hecquin_learning)
+
 # TextChunker boundary behaviour.
 hecquin_add_unit_test(hecquin_sound_test_text_chunker
     ${HECQUIN_SOUND_TEST_SRC_ROOT}/learning/test_text_chunker.cpp)
@@ -243,6 +260,68 @@ target_link_libraries(hecquin_sound_test_ingest_chunking_strategy PRIVATE
 hecquin_add_unit_test(hecquin_sound_test_content_fingerprint
     ${HECQUIN_SOUND_TEST_SRC_ROOT}/learning/ingest/test_content_fingerprint.cpp
     ${HECQUIN_SOUND_SRC_ROOT}/learning/ingest/ContentFingerprint.cpp)
+
+# JsonlChunker single-line JSON guard: a one-line `.json` document larger
+# than the chunk budget must split into prose chunks (issue #5).
+hecquin_add_unit_test(hecquin_sound_test_jsonl_single_line_json
+    ${HECQUIN_SOUND_TEST_SRC_ROOT}/learning/ingest/test_jsonl_chunker_single_line_json.cpp)
+target_link_libraries(hecquin_sound_test_jsonl_single_line_json PRIVATE hecquin_learning)
+
+# EmbeddingBatcher stable-failure shortcut: skip the per-chunk loop when
+# the batch failure is structural (issue #6 part 1).
+hecquin_add_unit_test(hecquin_sound_test_embedding_batcher_stable
+    ${HECQUIN_SOUND_TEST_SRC_ROOT}/learning/ingest/test_embedding_batcher_skips_fallback_on_stable.cpp)
+target_link_libraries(hecquin_sound_test_embedding_batcher_stable PRIVATE hecquin_learning)
+
+# End-to-end Ingestor regressions — share a tmp DB + fake HTTP harness.
+if (HECQUIN_HAS_SQLITE)
+    # Re-running ingest from a different cwd must hit the unchanged-skip
+    # branch (issue #4 — canonical_identity for documents.source).
+    hecquin_add_unit_test(hecquin_sound_test_ingestor_cwd_independence
+        ${HECQUIN_SOUND_TEST_SRC_ROOT}/learning/ingest/test_ingestor_cwd_independence.cpp)
+    target_link_libraries(hecquin_sound_test_ingestor_cwd_independence PRIVATE
+        hecquin_learning)
+
+    # Shrinking a source file (M -> N chunks) must leave only N rows for that
+    # source — no orphaned chunks N+1..M (issue #2 — atomic per-file replace).
+    hecquin_add_unit_test(hecquin_sound_test_ingestor_shrink_cleanup
+        ${HECQUIN_SOUND_TEST_SRC_ROOT}/learning/ingest/test_ingestor_shrink_cleanup.cpp)
+    target_link_libraries(hecquin_sound_test_ingestor_shrink_cleanup PRIVATE
+        hecquin_learning)
+
+    # A partial chunk failure must NOT mark the file ingested AND must roll
+    # back the rows that did write, so a re-run will retry (issue #3).
+    hecquin_add_unit_test(hecquin_sound_test_ingestor_partial_failure_no_mark
+        ${HECQUIN_SOUND_TEST_SRC_ROOT}/learning/ingest/test_ingestor_partial_failure_no_mark.cpp)
+    target_link_libraries(hecquin_sound_test_ingestor_partial_failure_no_mark PRIVATE
+        hecquin_learning)
+
+    # --prune-missing drops rows whose source file disappeared from disk; the
+    # default (no flag) leaves them alone (issue #7).
+    hecquin_add_unit_test(hecquin_sound_test_ingestor_prune_missing
+        ${HECQUIN_SOUND_TEST_SRC_ROOT}/learning/ingest/test_ingestor_prune_missing.cpp)
+    target_link_libraries(hecquin_sound_test_ingestor_prune_missing PRIVATE
+        hecquin_learning)
+endif ()
+
+# ----- learning/cli/  CSV spend-log writers (file-only; no DB / HTTP) --------
+
+# Per-call CSV sink: header + escaping for fields with commas/quotes.
+hecquin_add_unit_test(hecquin_sound_test_csv_api_call_sink_appends
+    ${HECQUIN_SOUND_TEST_SRC_ROOT}/learning/cli/test_csv_api_call_sink_appends_and_escapes.cpp
+    ${HECQUIN_SOUND_SRC_ROOT}/learning/cli/CsvApiCallSink.cpp
+    ${HECQUIN_SOUND_SRC_ROOT}/learning/cli/RunSummaryCsv.cpp)
+
+# Per-call CSV sink: header is written exactly once across reopens.
+hecquin_add_unit_test(hecquin_sound_test_csv_api_call_sink_header_once
+    ${HECQUIN_SOUND_TEST_SRC_ROOT}/learning/cli/test_csv_api_call_sink_header_only_once.cpp
+    ${HECQUIN_SOUND_SRC_ROOT}/learning/cli/CsvApiCallSink.cpp
+    ${HECQUIN_SOUND_SRC_ROOT}/learning/cli/RunSummaryCsv.cpp)
+
+# Per-run summary CSV: header on first call, append on subsequent ones.
+hecquin_add_unit_test(hecquin_sound_test_run_summary_csv_appends
+    ${HECQUIN_SOUND_TEST_SRC_ROOT}/learning/cli/test_run_summary_csv_appends.cpp
+    ${HECQUIN_SOUND_SRC_ROOT}/learning/cli/RunSummaryCsv.cpp)
 
 # ----- learning/pronunciation/ -----------------------------------------------
 

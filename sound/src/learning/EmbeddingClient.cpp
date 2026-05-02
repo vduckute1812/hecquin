@@ -15,19 +15,16 @@ using nlohmann::json;
 
 namespace {
 
-// Number of POST attempts before giving up on a batch.  We retry on transport
-// failures (DNS, TLS, reset, read timeout) and on retryable HTTP status codes
-// (429 rate-limit, 5xx server errors, 408/425 timing).  A stable 429 from a
-// quota breach will still fail, but fixes hours-long ingests from dying on
-// one flaky packet.
+// Retry transport blips and 408/425/429/5xx; backoff = 500/1000/2000/4000 ms.
 constexpr int kMaxAttempts = 4;
-// Exponential backoff base (ms): 500, 1000, 2000, 4000.
 constexpr int kBackoffBaseMs = 500;
 
-bool is_retryable_status(long status) {
-    if (status == 408 || status == 425 || status == 429) return true;
-    if (status >= 500 && status < 600) return true;
-    return false;
+StatusKind classify(long status) {
+    if (status >= 200 && status < 300) return StatusKind::Ok;
+    if (status == 400 || status == 401 || status == 403) return StatusKind::Stable;
+    if (status == 408 || status == 425 || status == 429) return StatusKind::Retryable;
+    if (status >= 500 && status < 600) return StatusKind::Retryable;
+    return StatusKind::Other;
 }
 
 } // namespace
@@ -61,13 +58,10 @@ std::string EmbeddingClient::build_request_body(const std::string& model,
         {"input", texts},
     };
     if (embedding_dim > 0) {
-        // gemini-embedding-001 natively returns 3072-dim vectors; the OpenAI
-        // layer honours `dimensions` so we can keep the vec0 schema stable.
+        // OpenAI-compat `dimensions` keeps the vec0 schema stable across providers.
         body["dimensions"] = embedding_dim;
     }
-    // `replace` swaps invalid UTF-8 bytes for U+FFFD instead of throwing.
-    // Ingestor already sanitizes upstream; this is belt-and-suspenders for
-    // any future caller that feeds raw user text straight into embed_many().
+    // U+FFFD-replace invalid UTF-8 instead of throwing (ingest sanitizes upstream).
     return body.dump(-1, ' ', false, json::error_handler_t::replace);
 }
 
@@ -105,27 +99,24 @@ std::optional<std::vector<float>> EmbeddingClient::embed(const std::string& text
 
 std::optional<std::vector<std::vector<float>>>
 EmbeddingClient::embed_many(const std::vector<std::string>& texts) const {
-    if (!ready() || texts.empty()) return std::nullopt;
+    return embed_many_classified(texts).vectors;
+}
 
-    const std::string body =
-        build_request_body(config_.embedding_model, texts, config_.embedding_dim);
-
-    std::optional<HttpResult> result;
+std::optional<::HttpResult>
+EmbeddingClient::attempt_with_backoff_(const std::string& body) const {
+    std::optional<::HttpResult> result;
     for (int attempt = 1; attempt <= kMaxAttempts; ++attempt) {
         result = http_->post_json(config_.embeddings_url, config_.api_key, body);
 
-        const bool transport_ok = result.has_value();
-        const bool status_ok = transport_ok && !is_retryable_status(result->status);
-        if (transport_ok && status_ok) {
+        if (result.has_value() && classify(result->status) != StatusKind::Retryable) {
             break;
         }
 
         const bool last = (attempt == kMaxAttempts);
         const int backoff_ms = kBackoffBaseMs * (1 << (attempt - 1));
         std::cerr << "[EmbeddingClient] "
-                  << (transport_ok
-                          ? ("HTTP " + std::to_string(result->status))
-                          : std::string("transport failure"))
+                  << (result ? ("HTTP " + std::to_string(result->status))
+                             : std::string("transport failure"))
                   << " on attempt " << attempt << "/" << kMaxAttempts;
         if (!last) {
             std::cerr << ", retrying in " << backoff_ms << "ms" << std::endl;
@@ -134,23 +125,60 @@ EmbeddingClient::embed_many(const std::vector<std::string>& texts) const {
             std::cerr << ", giving up" << std::endl;
         }
     }
+    return result;
+}
 
-    if (!result) {
-        return std::nullopt;
+void EmbeddingClient::classify_http_status_(const ::HttpResult& result,
+                                            EmbedManyResult& out) const {
+    out.http_status = result.status;
+    const auto kind = classify(result.status);
+    if (kind == StatusKind::Ok) return;
+    std::cerr << "[EmbeddingClient] HTTP " << result.status << ": "
+              << result.body.substr(0, 500) << std::endl;
+    if (kind == StatusKind::Stable) {
+        out.retry_per_chunk_worthwhile = false;
     }
-    if (result->status < 200 || result->status >= 300) {
-        std::cerr << "[EmbeddingClient] HTTP " << result->status << ": "
-                  << result->body.substr(0, 500) << std::endl;
-        return std::nullopt;
+}
+
+void EmbeddingClient::detect_dim_mismatch_in_(const std::string& body,
+                                              EmbedManyResult& out) const {
+    if (config_.embedding_dim <= 0) return;
+    try {
+        const auto j = json::parse(body);
+        const auto& data = j.at("data");
+        if (!data.is_array() || data.empty()) return;
+        const auto& emb = data.front().at("embedding");
+        if (emb.is_array() && static_cast<int>(emb.size()) != config_.embedding_dim) {
+            out.dim_mismatch = true;
+            out.retry_per_chunk_worthwhile = false;
+        }
+    } catch (...) {
+        // Leave retry_per_chunk_worthwhile=true; a single bad chunk may parse alone.
     }
+}
+
+EmbedManyResult
+EmbeddingClient::embed_many_classified(const std::vector<std::string>& texts) const {
+    EmbedManyResult out;
+    if (!ready() || texts.empty()) return out;
+
+    const std::string body =
+        build_request_body(config_.embedding_model, texts, config_.embedding_dim);
+    auto result = attempt_with_backoff_(body);
+    if (!result) return out;
+
+    classify_http_status_(*result, out);
+    if (classify(result->status) != StatusKind::Ok) return out;
 
     auto parsed = parse_response(result->body, texts.size(), config_.embedding_dim);
     if (!parsed) {
         std::cerr << "[EmbeddingClient] could not parse response\n  body: "
                   << result->body.substr(0, 200) << std::endl;
-        return std::nullopt;
+        detect_dim_mismatch_in_(result->body, out);
+        return out;
     }
-    return parsed;
+    out.vectors = std::move(parsed);
+    return out;
 }
 
 std::optional<std::vector<std::vector<float>>>

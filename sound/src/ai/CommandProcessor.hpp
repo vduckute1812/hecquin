@@ -12,12 +12,11 @@
 #include <string>
 
 /**
- * High-level router: tries the fast regex matcher first, falls back to the
- * HTTP chat client.  Composes `LocalIntentMatcher` + `ChatClient` so each is
- * independently testable.
+ * Local regex first, then `ChatClient`. Default ctor owns `CurlHttpClient`;
+ * inject `IHttpClient&` for tests.
  *
- * The default constructor builds its own `CurlHttpClient`; tests (or
- * alternative transports) can inject an `IHttpClient&` instead.
+ * Not thread-safe across concurrent `process`/`match_local` (shared `ChatClient`
+ * state). `process` blocks on HTTP when chat runs; `VoiceListener` calls it sync.
  */
 class CommandProcessor {
 public:
@@ -29,14 +28,14 @@ public:
                      hecquin::ai::IHttpClient& http,
                      hecquin::ai::LocalIntentMatcherConfig matcher_cfg = {});
 
-    /** Full pipeline: fast local regex, then external chat API. */
-    Action process(const std::string& transcript);
+    /** Local match, else chat (blocks on HTTP). */
+    [[nodiscard]] Action process(const std::string& transcript);
 
-    /** Run `process` on a worker thread. Caller must outlive the returned future. */
-    std::future<Action> process_async(const std::string& transcript);
+    /** `std::async(process)`; keep `this` alive until the future is ready. */
+    [[nodiscard]] std::future<Action> process_async(const std::string& transcript);
 
     /** Run only the local regex layer. Returns nullopt on no match. */
-    std::optional<Action> match_local(const std::string& transcript) const;
+    [[nodiscard]] std::optional<Action> match_local(const std::string& transcript) const;
 
     const AiClientConfig& config() const { return config_; }
 

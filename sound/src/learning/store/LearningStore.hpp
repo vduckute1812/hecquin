@@ -63,6 +63,22 @@ public:
 
     void record_ingested_file(const std::string& path, const std::string& hash);
 
+    /**
+     * Drop every `documents` row (and the matching vector row) whose `source`
+     * matches `source`.  Returns the number of `documents` rows removed.
+     * Wrapped in a single transaction so the documents and `vec_documents`
+     * tables stay consistent.  Used by the ingestor for atomic per-file
+     * replace (so a re-ingest of a shrunk file leaves no orphan chunks) and
+     * by the optional --prune-missing pass.
+     */
+    int purge_documents_for_source(const std::string& source);
+
+    /** Distinct `source` values currently stored in `documents`. */
+    std::vector<std::string> list_document_sources() const;
+
+    /** Drop the row in `ingested_files` whose `path` equals `path`, if any. */
+    void delete_ingested_file(const std::string& path);
+
     /** Run KNN search over the embedding column. */
     std::vector<RetrievedDocument> query_top_k(const std::vector<float>& embedding, int k) const;
 

@@ -1,6 +1,9 @@
 #pragma once
 
+#include "learning/ingest/RunBreaker.hpp"
+
 #include <cstddef>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -9,10 +12,13 @@ namespace hecquin::learning {
 class LearningStore;
 class EmbeddingClient;
 
+namespace ingest { struct PlannedFile; }
+
 struct IngestReport {
     int files_scanned = 0;
     int files_skipped = 0;
     int files_ingested = 0;
+    int files_pruned = 0;
     int chunks_written = 0;
     int chunks_failed = 0;
 };
@@ -24,28 +30,25 @@ struct IngestorConfig {
     int chunk_overlap_chars = 200;
     bool force_rebuild = false;
 
-    /**
-     * How many chunks to pack into a single `/embeddings` request.  Gemini's
-     * OpenAI-compat endpoint caps array length around 100; 16 is a safe
-     * default that still yields ~10× speed-up over single-item requests.
-     * Set to 1 to disable batching (useful when debugging a specific chunk).
-     */
+    /** Chunks per `/embeddings` request. CLI: `--batch-size`. */
     int embed_batch_size = 16;
+
+    /** Drop DB rows whose source vanished from disk. CLI: `--prune-missing`. */
+    bool prune_missing_sources = false;
+
+    /** Abort after N back-to-back failed chunks. 0 disables. CLI: `--max-fail-streak`. */
+    int max_consecutive_chunk_failures = 50;
+
+    /** Whole-run deadline in seconds. 0 = unbounded. CLI: `--deadline`. */
+    int run_deadline_seconds = 0;
+
+    /** Skip files larger than this (bytes). 0 disables. CLI: `--max-file-bytes`. */
+    long long max_file_bytes = 50LL * 1024 * 1024;
 };
 
 /**
- * Scans curriculum / custom directories, skips unchanged files (by content hash),
- * chunks text, embeds each chunk through `EmbeddingClient`, and upserts into `LearningStore`.
- *
- * Internally this is a thin coordinator over the collaborators under
- * `src/learning/ingest/`:
- *
- *   - `FileDiscovery`        — directory walk + kind assignment
- *   - `ContentFingerprint`   — FNV-1a change detection
- *   - `ChunkingStrategy`     — prose vs JSONL splitter (Strategy)
- *   - `EmbeddingBatcher`     — batched embed + per-chunk fallback
- *   - `DocumentPersister`    — per-chunk `DocumentRecord` assembly
- *   - `ProgressReporter`     — CLI output / ETA
+ * Coordinator for the ingest pipeline (FileDiscovery → ContentFingerprint →
+ * ChunkingStrategy → EmbeddingBatcher → DocumentPersister → ProgressReporter).
  */
 class Ingestor {
 public:
@@ -55,16 +58,50 @@ public:
     IngestReport run();
 
 private:
+    /** Per-file state carried between the three pipeline stages. */
+    struct FilePlan {
+        std::string path;
+        std::string source_id;
+        std::string title;
+        std::string kind;
+        std::string hash;
+        std::vector<std::string> chunks;
+        std::size_t content_size = 0;
+    };
+
+    /** Result of the embed-and-persist stage for a single file. */
+    struct ChunkOutcome {
+        int ok = 0;
+        int failed = 0;
+    };
+
+    /** Sentinel run that hard-stops on dim mismatch; returns true iff safe to continue. */
+    bool probe_embedding_dim_();
+
     void ingest_file_(const std::string& path, const std::string& kind,
                       IngestReport& report);
+
+    /** Stat / read / fingerprint / chunk. nullopt = file already counted as skipped. */
+    std::optional<FilePlan> prepare_file_(const std::string& path,
+                                          const std::string& kind,
+                                          IngestReport& report);
+
+    ChunkOutcome embed_and_persist_(const FilePlan& plan, IngestReport& report);
+
+    void commit_or_rollback_(const FilePlan& plan, ChunkOutcome outcome,
+                             int chunks_failed_at_entry, IngestReport& report);
+
+    void prune_missing_sources_(const std::vector<ingest::PlannedFile>& plan,
+                                IngestReport& report);
 
     LearningStore& store_;
     EmbeddingClient& embed_;
     IngestorConfig cfg_;
 
-    // Progress counters (updated by run()).
     std::size_t total_files_ = 0;
     std::size_t file_index_ = 0;
+
+    std::optional<ingest::RunBreaker> breaker_;
 };
 
 } // namespace hecquin::learning

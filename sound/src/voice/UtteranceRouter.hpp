@@ -26,7 +26,7 @@ namespace hecquin::voice {
  * Each handler returns an `Action`.  Returning `std::nullopt` from a
  * handler passes the utterance down the chain.  The router also reports
  * whether the resolved action came from the local matcher so the caller
- * can update mode state accordingly.
+ * can update mode state accordingly.  `route()` is sync; fallback may block on chat HTTP.
  */
 class UtteranceRouter {
 public:
@@ -46,7 +46,7 @@ public:
         bool from_local_intent = false;
     };
 
-    Result route(const Utterance& utterance) const;
+    [[nodiscard]] Result route(const Utterance& utterance) const;
 
 private:
     CommandProcessor& commands_;

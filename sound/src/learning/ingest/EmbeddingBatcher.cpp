@@ -15,15 +15,20 @@ EmbeddingBatcher::embed_slice(const std::vector<std::string>& slice) {
     std::vector<std::optional<std::vector<float>>> out;
     out.reserve(slice.size());
 
-    const auto batch_embed = embed_.embed_many(slice);
-    if (batch_embed && batch_embed->size() == slice.size()) {
-        for (auto& v : *batch_embed) {
+    const auto batch = embed_.embed_many_classified(slice);
+    if (batch.vectors && batch.vectors->size() == slice.size()) {
+        for (auto& v : *batch.vectors) {
             out.emplace_back(std::move(v));
         }
         return out;
     }
 
-    // Fallback: per-chunk so a single bad chunk doesn't tank the file.
+    // Stable failure: per-chunk would just re-burn quota with the same answer.
+    if (!batch.retry_per_chunk_worthwhile) {
+        out.assign(slice.size(), std::nullopt);
+        return out;
+    }
+
     for (const auto& chunk : slice) {
         auto single = embed_.embed(chunk);
         out.emplace_back(single ? std::optional<std::vector<float>>(std::move(*single))

@@ -1,5 +1,9 @@
 #include "config/AppConfig.hpp"
 
+#include "common/PathUtils.hpp"
+
+#include <filesystem>
+
 static constexpr const char* kDefaultSystemPrompt =
     "You are a voice assistant on a smart speaker. "
     "Reply in 1-3 short sentences using plain spoken language. "
@@ -77,6 +81,14 @@ AppConfig AppConfig::load(const char* env_file_path, const char* prompts_dir) {
         } catch (...) {
         }
     }
+    const std::string ingest_api_log = store.resolve("HECQUIN_INGEST_API_LOG_CSV");
+    if (!ingest_api_log.empty()) {
+        cfg.learning.ingest_api_log_csv = ingest_api_log;
+    }
+    const std::string ingest_run_summary = store.resolve("HECQUIN_INGEST_RUN_SUMMARY_CSV");
+    if (!ingest_run_summary.empty()) {
+        cfg.learning.ingest_run_summary_csv = ingest_run_summary;
+    }
 
     const std::string pron_model = store.resolve("HECQUIN_PRONUNCIATION_MODEL");
     if (!pron_model.empty()) {
@@ -118,6 +130,27 @@ AppConfig AppConfig::load(const char* env_file_path, const char* prompts_dir) {
     if (!music_rate.empty()) {
         try { cfg.music.sample_rate_hz = std::stoi(music_rate); } catch (...) {}
     }
+
+    // Anchor relative paths against the config file's dir (cwd-independent).
+    std::string base_dir;
+    if (env_file_path && *env_file_path) {
+        base_dir = std::filesystem::path(env_file_path).parent_path().string();
+    }
+    auto anchor = [&](std::string& s) {
+        s = hecquin::common::resolve_against_dir(base_dir, std::move(s));
+    };
+    for (std::string* p : {
+        &cfg.learning.db_path,
+        &cfg.learning.curriculum_dir,
+        &cfg.learning.custom_dir,
+        &cfg.learning.ingest_api_log_csv,
+        &cfg.learning.ingest_run_summary_csv,
+        &cfg.pronunciation.model_path,
+        &cfg.pronunciation.vocab_path,
+        &cfg.pronunciation.calibration_path,
+        &cfg.pronunciation.drill_sentences_path,
+        &cfg.music.cookies_file,
+    }) anchor(*p);
 
     return cfg;
 }

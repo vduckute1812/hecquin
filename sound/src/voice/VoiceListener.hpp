@@ -85,6 +85,7 @@ struct VadGateDecision;
  * `Drill` modes they flow through the attached tutor callback (if any).  Voice
  * commands `start/exit english lesson` and `start/exit pronunciation drill`
  * flip the mode via `LessonModeToggle` / `DrillModeToggle` actions.
+ * Utterance handling is sync on this thread (router/tutor/drill may block on I/O).
  */
 class VoiceListener {
 public:

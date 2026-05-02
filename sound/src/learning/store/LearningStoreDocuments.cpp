@@ -146,6 +146,76 @@ std::vector<std::string> sample_drill_sentences(sqlite3* db, int limit) {
     return out;
 }
 
+int purge_documents_for_source(sqlite3* db, const std::string& source) {
+    using learning::detail::prepare_or_log;
+    using learning::detail::step_done;
+    using learning::detail::Transaction;
+    if (!db || source.empty()) return 0;
+
+    Transaction tx(db);
+    if (!tx.active()) return 0;
+
+    // vec0 only supports rowid-keyed deletes — snapshot ids first.
+    std::vector<int64_t> rowids;
+    {
+        auto q = prepare_or_log(db,
+            "SELECT id FROM documents WHERE source = ?;", "purge.select");
+        if (!q) return 0;
+        sqlite3_bind_text(q.get(), 1, source.c_str(), -1, SQLITE_TRANSIENT);
+        while (sqlite3_step(q.get()) == SQLITE_ROW) {
+            rowids.push_back(sqlite3_column_int64(q.get(), 0));
+        }
+    }
+
+    if (!rowids.empty()) {
+        auto vdel = prepare_or_log(db,
+            "DELETE FROM vec_documents WHERE rowid = ?;", "purge.vec_del");
+        if (!vdel) return 0;
+        for (int64_t rowid : rowids) {
+            sqlite3_reset(vdel.get());
+            sqlite3_clear_bindings(vdel.get());
+            sqlite3_bind_int64(vdel.get(), 1, rowid);
+            if (!step_done(db, vdel.get(), "purge.vec_del")) return 0;
+        }
+    }
+
+    {
+        auto del = prepare_or_log(db,
+            "DELETE FROM documents WHERE source = ?;", "purge.doc_del");
+        if (!del) return 0;
+        sqlite3_bind_text(del.get(), 1, source.c_str(), -1, SQLITE_TRANSIENT);
+        if (!step_done(db, del.get(), "purge.doc_del")) return 0;
+    }
+
+    if (!tx.commit()) return 0;
+    return static_cast<int>(rowids.size());
+}
+
+std::vector<std::string> list_document_sources(sqlite3* db) {
+    using learning::detail::prepare_or_log;
+    std::vector<std::string> out;
+    if (!db) return out;
+    auto q = prepare_or_log(db,
+        "SELECT DISTINCT source FROM documents;", "documents.sources");
+    if (!q) return out;
+    while (sqlite3_step(q.get()) == SQLITE_ROW) {
+        const unsigned char* t = sqlite3_column_text(q.get(), 0);
+        if (t) out.emplace_back(reinterpret_cast<const char*>(t));
+    }
+    return out;
+}
+
+void delete_ingested_file(sqlite3* db, const std::string& path) {
+    using learning::detail::prepare_or_log;
+    using learning::detail::step_done;
+    if (!db || path.empty()) return;
+    auto q = prepare_or_log(db,
+        "DELETE FROM ingested_files WHERE path = ?;", "ingested.delete");
+    if (!q) return;
+    sqlite3_bind_text(q.get(), 1, path.c_str(), -1, SQLITE_TRANSIENT);
+    step_done(db, q.get(), "ingested.delete");
+}
+
 } // namespace store::detail
 
 #endif // HECQUIN_WITH_SQLITE
@@ -187,6 +257,31 @@ std::vector<std::string> LearningStore::sample_drill_sentences(int limit) const 
     return {};
 #else
     return store::detail::sample_drill_sentences(db_, limit);
+#endif
+}
+
+int LearningStore::purge_documents_for_source(const std::string& source) {
+#ifndef HECQUIN_WITH_SQLITE
+    (void)source;
+    return 0;
+#else
+    return store::detail::purge_documents_for_source(db_, source);
+#endif
+}
+
+std::vector<std::string> LearningStore::list_document_sources() const {
+#ifndef HECQUIN_WITH_SQLITE
+    return {};
+#else
+    return store::detail::list_document_sources(db_);
+#endif
+}
+
+void LearningStore::delete_ingested_file(const std::string& path) {
+#ifndef HECQUIN_WITH_SQLITE
+    (void)path;
+#else
+    store::detail::delete_ingested_file(db_, path);
 #endif
 }
 

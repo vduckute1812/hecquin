@@ -122,10 +122,14 @@ bool LearningStore::check_embedding_dim_() {
         stored_dim = 0;
     }
     if (stored_dim != embedding_dim_) {
-        std::cerr << "[LearningStore] REFUSING TO OPEN: embedding dim mismatch. "
-                  << "DB was built with dim=" << stored_dim
-                  << " but config requests dim=" << embedding_dim_ << ". "
-                  << "Rebuild the DB (delete " << db_path_ << ") or keep the original dim."
+        std::cerr << "[LearningStore] REFUSING TO OPEN: embedding dim mismatch.\n"
+                  << "  DB built with dim=" << stored_dim
+                  << " but config requests dim=" << embedding_dim_ << ".\n"
+                  << "  Fix one of:\n"
+                  << "    (a) keep the existing data, set HECQUIN_AI_EMBEDDING_DIM="
+                  << stored_dim << " in .env/config.env\n"
+                  << "    (b) rebuild from scratch: rm " << db_path_
+                  << " && ./dev.sh learning:ingest"
                   << std::endl;
         return false;
     }

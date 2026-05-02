@@ -18,6 +18,10 @@ int main() {
 
     auto matcher_cfg = hecquin::ai::LocalIntentMatcherConfig::make_from_learning(
         app.config().learning);
+
+    // Before CommandProcessor(std::move(cfg.ai)) — else capability probe sees no API key.
+    app.speak_capability_summary();
+
     CommandProcessor commands(std::move(app.config().ai), std::move(matcher_cfg));
 
     VoiceListenerConfig vcfg;
@@ -26,9 +30,6 @@ int main() {
                            app.running(), app.piper_model_path(), vcfg);
 
     auto music = hecquin::voice::install_music_wiring(listener, app.config().music);
-
-    // Tier-3 #11: announce any missing capabilities before listening.
-    app.speak_capability_summary();
 
     listener.run();
 

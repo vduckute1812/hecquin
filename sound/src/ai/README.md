@@ -26,7 +26,7 @@ RetryingHttpClient
 |---|---|
 | `LocalIntentMatcher.hpp/cpp` | Case-insensitive regex matcher. Patterns come from `AppConfig::learning` (lesson/drill phrases) plus built-ins for device / story / music / UX intents. Returns a typed `std::optional<ActionMatch>` so the caller never has to re-run the regex to decide which toggle fired. Built-in patterns now cover: `device` (turn on/off), `story`, `music` (open/cancel/pause/resume/volume up/down/skip), `lesson_start/end`, `drill_start/end/advance`, `abort` (universal stop), `help`, `sleep` / `wake`, and `identify_user` (with name capture group). |
 | `ChatClient.hpp/cpp` | OpenAI-compatible chat-completions client. Takes an `IHttpClient&` so tests can inject a canned response. |
-| `CommandProcessor.hpp/cpp` | Thin façade: tries `match_local` first, falls back to `ChatClient::ask`. Exposes `process_async` for off-loop chat calls. |
+| `CommandProcessor.hpp/cpp` | `match_local` then `ChatClient::ask` (blocking). Optional `process_async`; live path uses sync `process` through `UtteranceRouter`. |
 | `OpenAiChatContent.hpp/cpp` | `nlohmann::json` extractor that pulls `choices[0].message.content` out of responses regardless of which OpenAI-compat host produced them. |
 | `HttpReplyBuckets.hpp/cpp` | Shared `short_reply_for_status(int)` → spoken-safe one-liner (`"I'm temporarily offline"`, `"temporarily unavailable"`, …). Used by both `ChatClient::ask` error paths and `EnglishTutorProcessor::call_llm_` to keep error replies consistent. |
 

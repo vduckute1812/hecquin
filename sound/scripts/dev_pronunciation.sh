@@ -205,7 +205,11 @@ cmd_pronunciation_drill() {
     echo "Run: ./dev.sh build"
     exit 1
   fi
-  (cd "$PROJECT_BUILD_DIR" && \
+  # chdir to $ROOT_DIR (not $PROJECT_BUILD_DIR) so the .env/* paths in
+  # config.env resolve to the same files english_ingest writes to.
+  # AppConfig::load also re-anchors against the config file's directory
+  # so direct invocation outside dev.sh still ends up on the right DB.
+  (cd "$ROOT_DIR" && \
    LD_LIBRARY_PATH="${WHISPER_INSTALL_DIR}/lib:${LD_LIBRARY_PATH:-}" \
-   ./pronunciation_drill "$@")
+   "$bin" "$@")
 }

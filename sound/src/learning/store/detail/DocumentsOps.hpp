@@ -39,6 +39,21 @@ void record_ingested_file(sqlite3* db,
                           const std::string& path,
                           const std::string& hash);
 
+/**
+ * Drop every `documents` (and matching `vec_documents`) row whose `source`
+ * equals `source`.  Returns the number of `documents` rows removed (0 when
+ * the source was unknown).  Wrapped in a transaction so vec0 + documents
+ * stay consistent on partial failure.  Used by the ingestor for atomic
+ * per-file replace and for the optional --prune-missing pass.
+ */
+int purge_documents_for_source(sqlite3* db, const std::string& source);
+
+/** Distinct `source` values currently present in `documents`. */
+std::vector<std::string> list_document_sources(sqlite3* db);
+
+/** Drop the row in `ingested_files` whose `path` equals `path`, if any. */
+void delete_ingested_file(sqlite3* db, const std::string& path);
+
 std::vector<std::string> sample_drill_sentences(sqlite3* db, int limit);
 
 } // namespace hecquin::learning::store::detail

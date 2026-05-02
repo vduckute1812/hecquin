@@ -14,7 +14,7 @@ cmd_deps() {
   else
     sudo apt update
     sudo apt install -y build-essential cmake pkg-config git libsdl2-dev libcurl4-openssl-dev \
-      espeak-ng libespeak-ng-dev libsqlite3-dev ffmpeg
+      espeak-ng libespeak-ng-dev libsqlite3-dev ffmpeg pipx
     # yt-dlp is intentionally *not* from apt (Debian / Ubuntu tend to
     # ship months-old releases that break with current YouTube signing).
     # Prefer pipx; fall back to a user-local pip if pipx is missing.
@@ -106,7 +106,13 @@ cmd_learning_ingest() {
   fi
   shift || true
   echo "🧠 Ingesting curriculum into vector DB..."
-  (cd "$ROOT_DIR" && "$ingest_bin" "$@")
+  # All three learning binaries chdir to $ROOT_DIR so the relative paths
+  # in .env/config.env resolve against the same root.  AppConfig::load
+  # also rewrites them against the config file's directory, so this is
+  # belt-and-suspenders for anyone running the binary directly.
+  (cd "$ROOT_DIR" && \
+   LD_LIBRARY_PATH="${WHISPER_INSTALL_DIR}/lib:${LD_LIBRARY_PATH:-}" \
+   "$ingest_bin" "$@")
 }
 
 cmd_english_tutor() {
@@ -116,7 +122,9 @@ cmd_english_tutor() {
     echo "Run: ./dev.sh build"
     exit 1
   fi
-  (cd "$PROJECT_BUILD_DIR" && LD_LIBRARY_PATH="${WHISPER_INSTALL_DIR}/lib:${LD_LIBRARY_PATH:-}" ./english_tutor)
+  (cd "$ROOT_DIR" && \
+   LD_LIBRARY_PATH="${WHISPER_INSTALL_DIR}/lib:${LD_LIBRARY_PATH:-}" \
+   "$bin")
 }
 
 # Format every C/C++ source under sound/ using the in-repo .clang-format.

@@ -17,6 +17,11 @@ struct LearningConfig {
     std::string drill_start_phrases = "start pronunciation drill|begin pronunciation|start drill";
     std::string drill_end_phrases = "exit drill|end drill|stop drill";
     int drill_pass_threshold = 75;
+
+    /** When non-empty, append per-/embeddings-call rows here. CLI: --api-log-csv. */
+    std::string ingest_api_log_csv;
+    /** When non-empty, append one summary row per ingest run. CLI: --run-summary-csv. */
+    std::string ingest_run_summary_csv;
 };
 
 /** Settings for the pronunciation / intonation drill subsystem. */

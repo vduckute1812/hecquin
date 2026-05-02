@@ -9,10 +9,12 @@ namespace hecquin::learning::ingest {
 namespace fs = std::filesystem;
 
 std::string kind_from_dir(const std::string& dir_name) {
-    if (dir_name.find("vocab") != std::string::npos)   return "vocabulary";
-    if (dir_name.find("grammar") != std::string::npos) return "grammar";
-    if (dir_name.find("dict") != std::string::npos)    return "dictionary";
-    if (dir_name.find("reader") != std::string::npos)  return "readers";
+    // Exact match on the first path component; empty == loose file under custom/.
+    if (dir_name.empty()) return "custom";
+    if (dir_name == "vocabulary" || dir_name == "vocab")   return "vocabulary";
+    if (dir_name == "grammar")                              return "grammar";
+    if (dir_name == "dictionary" || dir_name == "dict")    return "dictionary";
+    if (dir_name == "readers"     || dir_name == "reader") return "readers";
     return "curriculum";
 }
 

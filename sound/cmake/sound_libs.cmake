@@ -150,6 +150,7 @@ if (HECQUIN_HAS_SQLITE AND NOT TARGET hecquin_learning)
         ${HECQUIN_SOUND_SRC_ROOT}/learning/ingest/EmbeddingBatcher.cpp
         ${HECQUIN_SOUND_SRC_ROOT}/learning/ingest/DocumentPersister.cpp
         ${HECQUIN_SOUND_SRC_ROOT}/learning/ingest/ProgressReporter.cpp
+        ${HECQUIN_SOUND_SRC_ROOT}/learning/ingest/RunBreaker.cpp
         ${HECQUIN_SOUND_SRC_ROOT}/learning/TextChunker.cpp
         ${HECQUIN_SOUND_SRC_ROOT}/learning/Vocabulary.cpp
         ${HECQUIN_SOUND_SRC_ROOT}/learning/RetrievalService.cpp

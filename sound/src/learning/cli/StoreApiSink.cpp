@@ -2,6 +2,8 @@
 
 #include "learning/store/LearningStore.hpp"
 
+#include <utility>
+
 namespace hecquin::learning::cli {
 
 hecquin::ai::ApiCallSink make_store_api_call_sink(
@@ -11,6 +13,16 @@ hecquin::ai::ApiCallSink make_store_api_call_sink(
                               r.status, r.latency_ms,
                               r.request_bytes, r.response_bytes,
                               r.ok, r.error);
+    };
+}
+
+hecquin::ai::ApiCallSink compose_sinks(hecquin::ai::ApiCallSink a,
+                                       hecquin::ai::ApiCallSink b) {
+    if (!a) return b;
+    if (!b) return a;
+    return [a = std::move(a), b = std::move(b)](const hecquin::ai::ApiCallRecord& r) {
+        a(r);
+        b(r);
     };
 }
 

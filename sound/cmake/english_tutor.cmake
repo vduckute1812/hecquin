@@ -14,6 +14,8 @@ endif ()
 add_executable(english_ingest
     ${HECQUIN_SOUND_SRC_ROOT}/learning/cli/EnglishIngest.cpp
     ${HECQUIN_SOUND_SRC_ROOT}/learning/cli/StoreApiSink.cpp
+    ${HECQUIN_SOUND_SRC_ROOT}/learning/cli/CsvApiCallSink.cpp
+    ${HECQUIN_SOUND_SRC_ROOT}/learning/cli/RunSummaryCsv.cpp
 )
 target_link_libraries(english_ingest PRIVATE hecquin_learning)
 hecquin_set_runtime_defaults(english_ingest)

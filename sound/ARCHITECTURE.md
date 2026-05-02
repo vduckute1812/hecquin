@@ -551,6 +551,18 @@ any structural / type mismatch. No hand-rolled scanning.
 
 `AppConfig::load()` accepts an `env_file_path` and an optional `prompts_dir` (both resolved to absolute paths by CMake at compile time to avoid working-directory issues).
 
+After all values are loaded, `AppConfig::load()` rewrites every path field
+(`learning.db_path`, `learning.curriculum_dir`, `learning.custom_dir`,
+`pronunciation.{model_path, vocab_path, calibration_path,
+drill_sentences_path}`, `music.cookies_file`) by passing it through
+`hecquin::common::resolve_against_dir(env_file_dir, value)`. Absolute
+paths are normalised but otherwise unchanged; relative paths are joined
+against the directory of the loaded `config.env`. This makes the working
+directory of the invoking binary irrelevant — `english_ingest` and
+`english_tutor` open the same `.env/shared/learning/db/learning.sqlite`
+even though `english_ingest` runs from `$ROOT_DIR` and `english_tutor`
+runs from `$PROJECT_BUILD_DIR` under `dev.sh`.
+
 `AiClientConfig` resolves settings with the following priority chains:
 
 | Setting | Priority |

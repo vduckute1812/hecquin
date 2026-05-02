@@ -16,4 +16,8 @@ namespace hecquin::learning::cli {
 hecquin::ai::ApiCallSink make_store_api_call_sink(
     hecquin::learning::LearningStore& store);
 
+/** Returns a sink that fans every record into both `a` and `b` (empty sides skipped). */
+hecquin::ai::ApiCallSink compose_sinks(hecquin::ai::ApiCallSink a,
+                                       hecquin::ai::ApiCallSink b);
+
 } // namespace hecquin::learning::cli

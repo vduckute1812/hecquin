@@ -24,10 +24,8 @@ struct EnglishTutorConfig {
 };
 
 /**
- * The lesson-mode counterpart of `CommandProcessor`:
- *  transcript → RAG context → Gemini chat → GrammarCorrectionAction.
- *
- * Also writes each round-trip to `ProgressTracker`.
+ * Lesson pipeline: RAG → chat → `GrammarCorrectionAction`; logs via `ProgressTracker`.
+ * One caller at a time; `process` blocks on RAG+HTTP. CLI wires `process` in `setTutorCallback`.
  */
 class EnglishTutorProcessor {
 public:
@@ -45,8 +43,8 @@ public:
         http_client_ = client;
     }
 
-    Action process(const std::string& transcript);
-    std::future<Action> process_async(const std::string& transcript);
+    [[nodiscard]] Action process(const std::string& transcript);
+    [[nodiscard]] std::future<Action> process_async(const std::string& transcript);
 
     bool ready() const;
     const AiClientConfig& config() const { return ai_; }
