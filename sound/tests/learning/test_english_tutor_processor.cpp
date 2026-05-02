@@ -25,6 +25,8 @@
 
 namespace {
 
+using hecquin::ai::HttpResult;
+
 int fail(const char* msg) {
     std::cerr << "[test_english_tutor_processor] FAIL: " << msg << std::endl;
     return 1;

@@ -8,7 +8,7 @@
 
 namespace hecquin::learning::pronunciation::drill {
 
-DrillProgressLogger::DrillProgressLogger(ProgressTracker* tracker)
+DrillProgressLogger::DrillProgressLogger(ProgressTrackerRef tracker)
     : tracker_(tracker) {}
 
 std::string DrillProgressLogger::build_json(const PronunciationScore& pron,
@@ -49,12 +49,12 @@ void DrillProgressLogger::log(const std::string& reference,
             per_phoneme.emplace_back(p.ipa, p.score_0_100);
         }
     }
-    tracker_->log_pronunciation(reference,
-                                transcript,
-                                pron.overall_0_100,
-                                intonation.overall_0_100,
-                                build_json(pron, intonation),
-                                per_phoneme);
+    tracker_->get().log_pronunciation(reference,
+                                      transcript,
+                                      pron.overall_0_100,
+                                      intonation.overall_0_100,
+                                      build_json(pron, intonation),
+                                      per_phoneme);
 }
 
 } // namespace hecquin::learning::pronunciation::drill

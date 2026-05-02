@@ -1,7 +1,8 @@
 #include "ai/RetryingHttpClient.hpp"
 
+#include "common/EnvParse.hpp"
+
 #include <algorithm>
-#include <cstdlib>
 #include <iostream>
 #include <random>
 #include <thread>
@@ -9,18 +10,6 @@
 namespace hecquin::ai {
 
 namespace {
-
-bool parse_long_env(const char* name, long& out) {
-    const char* raw = std::getenv(name);
-    if (!raw || *raw == '\0') return false;
-    try {
-        out = std::stol(raw);
-        return true;
-    } catch (...) {
-        std::cerr << "[retry] ignoring invalid " << name << "=" << raw << std::endl;
-        return false;
-    }
-}
 
 void default_sleep(std::chrono::milliseconds ms) {
     std::this_thread::sleep_for(ms);
@@ -37,14 +26,15 @@ double uniform_jitter() {
 } // namespace
 
 void RetryPolicy::apply_env_overrides() {
+    namespace env = hecquin::common::env;
     long v = 0;
-    if (parse_long_env("HECQUIN_HTTP_RETRY_MAX", v) && v > 0) {
+    if (env::parse_long("HECQUIN_HTTP_RETRY_MAX", v) && v > 0) {
         max_attempts = static_cast<std::size_t>(v);
     }
-    if (parse_long_env("HECQUIN_HTTP_RETRY_BASE_MS", v) && v >= 0) {
+    if (env::parse_long("HECQUIN_HTTP_RETRY_BASE_MS", v) && v >= 0) {
         base_delay = std::chrono::milliseconds(v);
     }
-    if (parse_long_env("HECQUIN_HTTP_RETRY_MAX_MS", v) && v >= 0) {
+    if (env::parse_long("HECQUIN_HTTP_RETRY_MAX_MS", v) && v >= 0) {
         max_delay = std::chrono::milliseconds(v);
     }
 }

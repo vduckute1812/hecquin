@@ -3,6 +3,8 @@
 #include "learning/pronunciation/PronunciationScorer.hpp"
 #include "learning/prosody/IntonationScorer.hpp"
 
+#include <functional>
+#include <optional>
 #include <string>
 
 namespace hecquin::learning {
@@ -21,7 +23,9 @@ namespace hecquin::learning::pronunciation::drill {
  */
 class DrillProgressLogger {
 public:
-    explicit DrillProgressLogger(ProgressTracker* tracker);
+    using ProgressTrackerRef = std::optional<std::reference_wrapper<ProgressTracker>>;
+
+    explicit DrillProgressLogger(ProgressTrackerRef tracker);
 
     /**
      * Serialise the combined pronunciation + intonation scores as JSON
@@ -37,7 +41,7 @@ public:
                                   const prosody::IntonationScore& intonation);
 
 private:
-    ProgressTracker* tracker_;
+    ProgressTrackerRef tracker_;
 };
 
 } // namespace hecquin::learning::pronunciation::drill

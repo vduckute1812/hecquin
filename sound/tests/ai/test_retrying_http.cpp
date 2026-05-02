@@ -15,6 +15,8 @@
 
 namespace {
 
+using hecquin::ai::HttpResult;
+
 int fail(const char* message) {
     std::cerr << "[test_retrying_http] FAIL: " << message << std::endl;
     return 1;

@@ -64,6 +64,22 @@ bool VoiceApp::init() {
         return false;
     }
     audio_opened_ = true;
+
+    // Open-time signal probe: if the chosen device produces nothing for
+    // ~500 ms the user almost certainly picked the wrong index (or hit
+    // a silent default).  We only warn — booting must still succeed
+    // because some setups legitimately start silent (paused mic, HFP
+    // not yet renegotiated) and recover later.
+    if (capture_.probeSignal(500) == 0) {
+        std::cerr << "[voice] Selected audio device produced no samples in 500 ms "
+                     "(AUDIO_DEVICE_INDEX="
+                  << config_.audio.device_index
+                  << "). VAD calibration will fall back to a seed floor. "
+                     "If VAD never reacts, try AUDIO_DEVICE_INDEX=<n> from "
+                     "the device list printed above, or ensure your Bluetooth "
+                     "headset is in HFP mode."
+                  << std::endl;
+    }
     return true;
 }
 

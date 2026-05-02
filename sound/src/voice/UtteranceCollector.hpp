@@ -5,6 +5,7 @@
 #include <atomic>
 #include <chrono>
 #include <cstddef>
+#include <cstdint>
 #include <functional>
 #include <optional>
 #include <vector>
@@ -131,6 +132,17 @@ public:
     }
 
     /**
+     * Optional hook when `adaptive_min_continue_thr` lifts the hysteresis
+     * threshold above `k_continue * start_thr`.  Rate-limited to ~5 s
+     * in the collector so steady-state calibration doesn't spam.
+     */
+    void set_continue_clamp_callback(
+        std::function<void(float raw_continue_thr, float applied_continue_thr,
+                           float start_thr)> cb) {
+        continue_clamp_cb_ = std::move(cb);
+    }
+
+    /**
      * Mark the assistant as actively speaking.  While set, the per-frame
      * VAD multiplies its start / continue thresholds by
      * `cfg_.tts_threshold_boost` so the assistant's own bleed cannot
@@ -147,6 +159,7 @@ private:
         None,        ///< Still collecting / not in collecting state.
         Silence,     ///< speech_ms ≥ min and silence_ms ≥ end_silence_ms.
         MaxDuration, ///< speech_ms exceeded `cfg_.max_utterance_ms`.
+        EarlyLowActivity, ///< short-window voiced ratio fell below cfg_.early_close_voiced_ratio.
     };
 
     void recompute_thresholds_();
@@ -169,6 +182,14 @@ private:
     EndReason end_reason_(const CollectedUtterance& u) const;
     /** Print the closing emoji line for the chosen end reason. */
     void announce_recording_complete_(EndReason reason) const;
+    /** Resize / clear the rolling voiced-frame ring buffer used by
+     *  the early-close path.  Idempotent; called on every utterance
+     *  start so config changes between utterances are picked up. */
+    void reset_recent_voiced_window_();
+    /** Push one per-tick voiced/unvoiced bit into the ring buffer
+     *  while a collection is in progress.  No-op when the early-close
+     *  path is disabled (`cfg_.early_close_voiced_ratio == 0`). */
+    void push_recent_voiced_(bool voiced);
 
     /** Outcome of a single `poll_tick_` invocation. */
     struct TickResult {
@@ -201,6 +222,16 @@ private:
     float dynamic_start_thr_;
     float dynamic_continue_thr_;
     float dynamic_min_utt_rms_;
+    /**
+     * Rolling window of recent per-frame voiced/unvoiced decisions
+     * (0/1) used by the reactive early-close path.  `recent_voiced_sum_`
+     * mirrors the sum so the ratio is O(1) per tick.  Sized lazily on
+     * first collection tick from `cfg_.early_close_window_ms`.
+     */
+    std::vector<std::uint8_t> recent_voiced_;
+    std::size_t recent_voiced_head_ = 0;
+    int recent_voiced_sum_ = 0;
+    int recent_voiced_capacity_ = 0;
     std::chrono::steady_clock::time_point last_debug_log_{};
     /**
      * Set once the calibration window completes so we print the
@@ -226,6 +257,9 @@ private:
     std::function<void(bool)> voice_state_cb_;
     /** Frame-cadence notification target; stored on the listener thread. */
     std::function<void()> frame_cb_;
+    /** Fires when continue-threshold clamp engages (optional). */
+    std::function<void(float, float, float)> continue_clamp_cb_;
+    std::chrono::steady_clock::time_point last_continue_clamp_cb_{};
 };
 
 } // namespace hecquin::voice

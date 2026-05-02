@@ -71,6 +71,13 @@ hecquin_add_unit_test(hecquin_sound_test_app_config_path_resolution
     ${HECQUIN_SOUND_TEST_SRC_ROOT}/config/test_app_config_path_resolution.cpp)
 target_link_libraries(hecquin_sound_test_app_config_path_resolution PRIVATE hecquin_config)
 
+# AiClientConfig::from_store: API-key fall-through chain, base URL +
+# model precedence, and process-env-overrides-file invariants.
+hecquin_add_unit_test(hecquin_sound_test_ai_client_config_precedence
+    ${HECQUIN_SOUND_TEST_SRC_ROOT}/config/test_ai_client_config_precedence.cpp)
+target_link_libraries(hecquin_sound_test_ai_client_config_precedence PRIVATE
+    hecquin_config)
+
 # =============================================================================
 # ai/  — hecquin_ai
 # =============================================================================
@@ -99,6 +106,14 @@ target_link_libraries(hecquin_sound_test_command_processor PRIVATE hecquin_ai)
 hecquin_add_unit_test(hecquin_sound_test_net_retry
     ${HECQUIN_SOUND_TEST_SRC_ROOT}/ai/test_retrying_http.cpp
     ${HECQUIN_SOUND_SRC_ROOT}/ai/RetryingHttpClient.cpp)
+
+# ChatClient cooldown: drives the client with a scripted IHttpClient
+# and asserts that consecutive 5xx / transport failures engage the
+# cooldown, while 4xx responses do not, and a success resets state.
+hecquin_add_unit_test(hecquin_sound_test_chat_client_cooldown
+    ${HECQUIN_SOUND_TEST_SRC_ROOT}/ai/test_chat_client_cooldown.cpp)
+target_link_libraries(hecquin_sound_test_chat_client_cooldown PRIVATE
+    hecquin_ai)
 
 # =============================================================================
 # voice/  — hecquin_voice_pipeline (and pure components below it)
@@ -159,6 +174,28 @@ hecquin_add_unit_test(hecquin_sound_test_audio_barge_in_controller
 target_include_directories(hecquin_sound_test_audio_barge_in_controller
     PRIVATE ${HECQUIN_SOUND_SRC_ROOT})
 
+# WakeWordGate: prefix strip, window expiry, PTT precedence, malformed
+# regex graceful-degradation.  Pure component, no SDL / Whisper.
+hecquin_add_unit_test(hecquin_sound_test_wake_word_gate
+    ${HECQUIN_SOUND_TEST_SRC_ROOT}/voice/test_wake_word_gate.cpp
+    ${HECQUIN_SOUND_SRC_ROOT}/voice/WakeWordGate.cpp)
+target_include_directories(hecquin_sound_test_wake_word_gate
+    PRIVATE ${HECQUIN_SOUND_SRC_ROOT})
+
+# ThinkingScheduler: re-armable single-shot timer used by the listener
+# to mask LLM latency with a soft "thinking" earcon.  Pure component,
+# no SDL / Whisper / Earcons coupling.
+hecquin_add_unit_test(hecquin_sound_test_thinking_scheduler
+    ${HECQUIN_SOUND_TEST_SRC_ROOT}/voice/test_thinking_scheduler.cpp
+    ${HECQUIN_SOUND_SRC_ROOT}/voice/ThinkingScheduler.cpp)
+target_include_directories(hecquin_sound_test_thinking_scheduler
+    PRIVATE ${HECQUIN_SOUND_SRC_ROOT})
+find_package(Threads QUIET)
+if (Threads_FOUND)
+    target_link_libraries(hecquin_sound_test_thinking_scheduler
+        PRIVATE Threads::Threads)
+endif ()
+
 # =============================================================================
 # tts/  — hecquin_piper_speech
 # =============================================================================
@@ -167,6 +204,14 @@ target_include_directories(hecquin_sound_test_audio_barge_in_controller
 hecquin_add_unit_test(hecquin_sound_test_piper_backend_fallback
     ${HECQUIN_SOUND_TEST_SRC_ROOT}/tts/test_piper_backend_fallback.cpp)
 target_link_libraries(hecquin_sound_test_piper_backend_fallback PRIVATE
+    hecquin_piper_speech)
+
+# WavReader edge cases: missing files, short headers, wrong magic,
+# header-only files, round-trip, multi-rate sample-rate parsing.  No
+# SDL or Piper involved — synthetic WAV bytes via /tmp.
+hecquin_add_unit_test(hecquin_sound_test_wav_reader
+    ${HECQUIN_SOUND_TEST_SRC_ROOT}/tts/test_wav_reader.cpp)
+target_link_libraries(hecquin_sound_test_wav_reader PRIVATE
     hecquin_piper_speech)
 
 # PcmRingQueue cv-backed drain signalling — no SDL needed, runs the
@@ -373,6 +418,12 @@ if (HECQUIN_HAS_SQLITE)
     hecquin_add_unit_test(hecquin_sound_test_english_tutor_processor
         ${HECQUIN_SOUND_TEST_SRC_ROOT}/learning/test_english_tutor_processor.cpp)
     target_link_libraries(hecquin_sound_test_english_tutor_processor PRIVATE
+        hecquin_learning)
+
+    # RetrievalService LRU cache: normalisation, eviction, recency bump.
+    hecquin_add_unit_test(hecquin_sound_test_retrieval_service_cache
+        ${HECQUIN_SOUND_TEST_SRC_ROOT}/learning/test_retrieval_service_cache.cpp)
+    target_link_libraries(hecquin_sound_test_retrieval_service_cache PRIVATE
         hecquin_learning)
 
     # Free-function tutor reply parser — pure, no DB / HTTP needed.

@@ -66,8 +66,8 @@ make_picker_cfg(const PronunciationDrillConfig& cfg) {
 
 PronunciationDrillProcessor::PronunciationDrillProcessor(
     const AppConfig& app_cfg,
-    LearningStore* store,
-    ProgressTracker* progress,
+    LearningStoreRef store,
+    ProgressTrackerRef progress,
     const std::string& piper_model_path,
     PronunciationDrillConfig cfg)
     : app_cfg_(app_cfg),
@@ -111,7 +111,7 @@ std::vector<std::string> PronunciationDrillProcessor::resolve_sentence_pool_() {
         pool = load_sentences_from_file(app_cfg_.pronunciation.drill_sentences_path);
     }
     if (pool.empty() && store_) {
-        pool = store_->sample_drill_sentences(50);
+        pool = store_->get().sample_drill_sentences(50);
     }
     if (pool.empty()) {
         pool = cfg_.fallback_sentences;

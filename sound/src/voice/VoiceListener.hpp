@@ -66,6 +66,7 @@ class UtteranceCollector;
 class UtteranceRouter;
 class TtsResponsePlayer;
 class PipelineTelemetry;
+class ThinkingScheduler;
 struct CollectedUtterance;
 struct VadGateDecision;
 } // namespace hecquin::voice
@@ -153,15 +154,18 @@ public:
     /**
      * Verdict from the secondary VAD gate that runs after the end-silence
      * timer fires.  `accept` is true iff the utterance should be handed to
-     * Whisper.  Otherwise `too_quiet` and/or `too_sparse` flags carry the
-     * precise reason(s) — both may be set if the audio missed on both knobs.
+     * Whisper.  Otherwise `too_quiet` / `too_sparse` / `too_flat` flags
+     * carry the precise reason(s) — multiple flags may be set if the
+     * audio missed on more than one knob.
      */
     struct VadGateDecision {
         bool accept;
         bool too_quiet;
         bool too_sparse;
+        bool too_flat = false;
         float mean_rms;
         float voiced_ratio;
+        float crest_factor = 0.0f;
     };
 
     /**
@@ -271,6 +275,13 @@ private:
     std::unique_ptr<hecquin::voice::UtteranceCollector> collector_;
     std::unique_ptr<hecquin::voice::TtsResponsePlayer> player_;
     std::unique_ptr<hecquin::voice::PipelineTelemetry> telemetry_;
+    /**
+     * Single re-armable timer used to fire the latency-mask
+     * "thinking" earcon at +N ms when a route() call takes too long.
+     * Owned here so its worker thread is created exactly once per
+     * listener (vs. once per utterance previously).
+     */
+    std::unique_ptr<hecquin::voice::ThinkingScheduler> thinking_scheduler_;
     /**
      * Barge-in coordinator.  Default-constructed with built-in
      * defaults; `apply_env_overrides` runs in the constructor so the

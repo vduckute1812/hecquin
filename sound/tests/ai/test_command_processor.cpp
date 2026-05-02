@@ -10,6 +10,7 @@
 #include <optional>
 #include <string>
 
+using hecquin::ai::HttpResult;
 using hecquin::ai::IHttpClient;
 
 namespace {

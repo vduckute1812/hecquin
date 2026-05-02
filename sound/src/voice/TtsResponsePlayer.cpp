@@ -80,7 +80,10 @@ namespace {
  *
  * Also asks the barge controller to duck any in-flight music so the
  * spoken reply isn't drowned out — confirmation lines played over a
- * song no longer require the user to lean in.
+ * song no longer require the user to lean in.  The duck profile
+ * (gain + attack/release ramps) is read from
+ * `AudioBargeInController::Config` so operators can tune it via
+ * `HECQUIN_TTS_DUCK_*` env vars without rebuilding.
  */
 class TtsActiveGuard {
 public:
@@ -89,14 +92,17 @@ public:
         : collector_(collector), barge_(barge) {
         if (collector_) collector_->set_tts_active(true);
         if (barge_) {
+            const auto& bcfg = barge_->config();
             barge_->set_tts_active(true);
-            barge_->tts_speak_begin(/*duck_gain=*/0.20f, /*ramp_ms=*/80);
+            barge_->tts_speak_begin(bcfg.tts_speak_duck_gain,
+                                    bcfg.tts_speak_attack_ms);
         }
     }
     ~TtsActiveGuard() {
         if (collector_) collector_->set_tts_active(false);
         if (barge_) {
-            barge_->tts_speak_end(/*ramp_ms=*/200);
+            const auto& bcfg = barge_->config();
+            barge_->tts_speak_end(bcfg.tts_speak_release_ms);
             barge_->set_tts_active(false);
         }
     }

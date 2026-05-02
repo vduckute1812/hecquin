@@ -12,6 +12,8 @@
 
 namespace {
 
+using hecquin::ai::HttpResult;
+
 int fail(const char* message) {
     std::cerr << "[test_embedding_client_no_retry_on_403] FAIL: " << message << std::endl;
     return 1;

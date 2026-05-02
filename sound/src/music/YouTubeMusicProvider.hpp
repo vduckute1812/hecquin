@@ -51,7 +51,8 @@ public:
     YouTubeMusicProvider& operator=(const YouTubeMusicProvider&) = delete;
 
     std::optional<MusicTrack> search(const std::string& query) override;
-    bool play(const MusicTrack& track) override;
+    bool play(const MusicTrack& track,
+              const MusicPlayCallbacks& callbacks = {}) override;
     void stop() override;
     void pause() override;
     void resume() override;

@@ -50,12 +50,14 @@ bool LearningApp::init() {
     // Drill processor.  The english_tutor binary treats drill as a sub-mode,
     // so it passes a distinct `drill_progress_`; pronunciation_drill uses
     // `progress_` directly (its home mode is drill).
-    ProgressTracker* drill_tracker =
-        drill_progress_ ? drill_progress_.get() : progress_.get();
+    ProgressTracker& drill_tracker =
+        drill_progress_ ? *drill_progress_ : *progress_;
+    PronunciationDrillProcessor::LearningStoreRef drill_store;
+    if (store_) drill_store = std::ref(*store_);
     PronunciationDrillConfig dcfg;
     dcfg.pass_threshold_0_100 = cfg.learning.drill_pass_threshold;
     drill_ = std::make_unique<PronunciationDrillProcessor>(
-        cfg, store_.get(), drill_tracker,
+        cfg, drill_store, std::ref(drill_tracker),
         voice_app_.piper_model_path(), dcfg);
     drill_ok_ = drill_->load();
     if (!drill_ok_) {

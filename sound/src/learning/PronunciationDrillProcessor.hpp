@@ -12,6 +12,7 @@
 
 #include <functional>
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -81,9 +82,19 @@ struct PronunciationDrillConfig {
  */
 class PronunciationDrillProcessor {
 public:
+    /**
+     * Optional non-owning collaborators.  `LearningStore` is consulted
+     * only when present (DB-driven sentence pool, weakest-phoneme
+     * picker).  `ProgressTracker` is logged into when present, no-op
+     * otherwise.  Both default to disengaged so unit tests can stand up
+     * the processor without a SQLite file.
+     */
+    using LearningStoreRef    = std::optional<std::reference_wrapper<LearningStore>>;
+    using ProgressTrackerRef  = std::optional<std::reference_wrapper<ProgressTracker>>;
+
     PronunciationDrillProcessor(const AppConfig& app_cfg,
-                                LearningStore* store,
-                                ProgressTracker* progress,
+                                LearningStoreRef store,
+                                ProgressTrackerRef progress,
                                 const std::string& piper_model_path,
                                 PronunciationDrillConfig cfg = {});
     ~PronunciationDrillProcessor();
@@ -154,7 +165,7 @@ private:
     void prime_picker_(std::vector<std::string> pool);
 
     const AppConfig& app_cfg_;
-    LearningStore* store_;
+    LearningStoreRef store_;
     PronunciationDrillConfig cfg_;
 
     pronunciation::drill::DrillSentencePicker picker_;

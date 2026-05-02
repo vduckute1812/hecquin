@@ -287,8 +287,8 @@ lifecycle. Adding Apple Music or any other back-end is a new
 
 `PiperSpeech` keeps the C-style public API (`piper_speak_and_play`, …) while
 delegating to `tts/PlayPipeline` + backend / playback strategies;
-`EnglishTutorProcessor` keeps its public interface (`process` /
-`process_async`) while delegating to `tutor/TutorContextBuilder`,
+`EnglishTutorProcessor` keeps its (synchronous-only) public interface
+(`process`) while delegating to `tutor/TutorContextBuilder`,
 `tutor/TutorChatRequest`, and `tutor/TutorReplyParser`;
 `YouTubeMusicProvider` is now an orchestrator over `music/yt/`;
 `StreamingSdlPlayer` composes `SdlMonoDevice` + `PcmRingQueue`;

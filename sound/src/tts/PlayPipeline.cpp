@@ -53,7 +53,9 @@ bool speak_and_play_streaming(const std::string& text,
     std::cout << "🗣️  Piper will say (streaming): " << text << std::endl;
 
     hecquin::tts::playback::StreamingSdlPlayer player;
-    if (!player.start(kPiperSampleRate)) {
+    const bool player_started = player.start(kPiperSampleRate);
+    if (detail::decide_streaming_path(player_started, /*spawn_succeeded=*/true)
+        == detail::StreamingDecision::FallbackToBuffered) {
         // SDL init / device open failed — fall back to the buffered
         // path so the user still hears the reply.
         return speak_and_play(text, model_path);
@@ -75,7 +77,8 @@ bool speak_and_play_streaming(const std::string& text,
                 return true;
             });
 
-    if (!result.spawned) {
+    if (detail::decide_streaming_path(player_started, result.spawned)
+        == detail::StreamingDecision::FallbackToBuffered) {
         // Spawn or pipe setup failed — fall back to buffered path.
         player.stop();
         return speak_and_play(text, model_path);
@@ -85,10 +88,12 @@ bool speak_and_play_streaming(const std::string& text,
     if (aborted) {
         // Caller asked for barge-in; report not-OK without logging the
         // wait status (the abort is the expected outcome here).
-        return false;
+        return detail::resolve_streaming_outcome(/*aborted=*/true,
+                                                 /*exit_status_ok=*/true);
     }
-
-    return hecquin::tts::backend::log_piper_wait_status(result.exit_status);
+    return detail::resolve_streaming_outcome(
+        /*aborted=*/false,
+        hecquin::tts::backend::log_piper_wait_status(result.exit_status));
 }
 
 } // namespace hecquin::tts

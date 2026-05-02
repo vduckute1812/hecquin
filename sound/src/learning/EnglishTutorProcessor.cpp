@@ -69,8 +69,8 @@ Action EnglishTutorProcessor::call_llm_(const std::string& user_text) {
     const auto result = http_client_
         ? http_client_->post_json(ai_.chat_completions_url, ai_.api_key, body,
                                   cfg_.http_timeout_seconds)
-        : http_post_json(ai_.chat_completions_url, ai_.api_key, body,
-                         cfg_.http_timeout_seconds);
+        : hecquin::ai::http_post_json(ai_.chat_completions_url, ai_.api_key,
+                                      body, cfg_.http_timeout_seconds);
     if (!result) {
         return make_fallback(trimmed, "I could not reach the tutor service.",
                              progress_);
@@ -94,10 +94,6 @@ Action EnglishTutorProcessor::call_llm_(const std::string& user_text) {
 
 Action EnglishTutorProcessor::process(const std::string& transcript) {
     return call_llm_(transcript);
-}
-
-std::future<Action> EnglishTutorProcessor::process_async(const std::string& transcript) {
-    return std::async(std::launch::async, [this, transcript]() { return process(transcript); });
 }
 
 } // namespace hecquin::learning

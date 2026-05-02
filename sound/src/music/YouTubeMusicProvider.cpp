@@ -52,14 +52,16 @@ YouTubeMusicProvider::search(const std::string& query) {
     return yt::parse_search_output(buf);
 }
 
-bool YouTubeMusicProvider::play(const MusicTrack& track) {
+bool YouTubeMusicProvider::play(const MusicTrack& track,
+                                const MusicPlayCallbacks& callbacks) {
     if (track.url.empty()) return false;
     aborted_.store(false);
 
     pipeline_ = std::make_unique<yt::YtPlaybackPipeline>();
     const std::string cmd = yt::build_playback_command(cfg_, track.url);
     const bool ok = pipeline_->run(cmd, cfg_.sample_rate_hz,
-                                   &child_pid_, aborted_);
+                                   &child_pid_, aborted_,
+                                   callbacks.on_first_audio_frame);
     pipeline_.reset();
     return ok;
 }

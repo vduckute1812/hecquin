@@ -7,6 +7,8 @@
 #include <memory>
 #include <mutex>
 
+namespace hecquin::ai {
+
 namespace {
 
 size_t write_to_string(char* ptr, size_t size, size_t nmemb, void* userdata) {
@@ -79,7 +81,11 @@ std::optional<HttpResult> http_post_json(const std::string& url,
     return HttpResult{http_code, std::move(response)};
 }
 
+} // namespace hecquin::ai
+
 #else
+
+namespace hecquin::ai {
 
 std::optional<HttpResult> http_post_json(const std::string& /*url*/,
                                          const std::string& /*bearer_token*/,
@@ -87,5 +93,7 @@ std::optional<HttpResult> http_post_json(const std::string& /*url*/,
                                          long /*timeout_seconds*/) {
     return std::nullopt;
 }
+
+} // namespace hecquin::ai
 
 #endif

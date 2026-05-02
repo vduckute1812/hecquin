@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <iostream>
 
 namespace hecquin::voice {
 
@@ -39,19 +40,37 @@ void WakeWordGate::apply_env_overrides() {
     }
     int iv = 0;
     if (env::parse_int("HECQUIN_WAKE_WINDOW_MS", iv)) {
-        wake_window_ms_ = std::max(0, iv);
+        wake_window_ms_.store(std::max(0, iv), std::memory_order_release);
     }
     if (const char* phrase = env::read_string("HECQUIN_WAKE_PHRASE")) {
-        try {
-            wake_re_ = std::regex(phrase,
-                std::regex_constants::ECMAScript | std::regex_constants::icase);
-            wake_re_src_ = phrase;
-        } catch (...) {
-            // Bad regex — keep the default and log.  We never throw out
-            // of this call because that would prevent the listener from
+        if (!set_wake_pattern(phrase)) {
+            // Bad regex — keep the default in place but tell the operator
+            // exactly which env var was at fault.  We never throw out of
+            // this call because that would prevent the listener from
             // booting on a malformed env.
+            std::cerr << "[wake] ignoring invalid HECQUIN_WAKE_PHRASE='"
+                      << phrase << "' (kept default pattern)" << std::endl;
         }
     }
+}
+
+bool WakeWordGate::set_wake_pattern(const std::string& pattern) {
+    try {
+        std::regex compiled(
+            pattern,
+            std::regex_constants::ECMAScript | std::regex_constants::icase);
+        std::lock_guard<std::mutex> lk(re_mu_);
+        wake_re_ = std::move(compiled);
+        wake_re_src_ = pattern;
+        return true;
+    } catch (const std::regex_error&) {
+        return false;
+    }
+}
+
+std::string WakeWordGate::wake_pattern() const {
+    std::lock_guard<std::mutex> lk(re_mu_);
+    return wake_re_src_;
 }
 
 void WakeWordGate::set_ptt_pressed(bool pressed) {
@@ -61,7 +80,10 @@ void WakeWordGate::set_ptt_pressed(bool pressed) {
 bool WakeWordGate::wake_phrase_match_(const std::string& s,
                                       std::string& stripped) const {
     std::smatch m;
-    if (!std::regex_search(s, m, wake_re_)) return false;
+    {
+        std::lock_guard<std::mutex> lk(re_mu_);
+        if (!std::regex_search(s, m, wake_re_)) return false;
+    }
     // Only accept matches at the very start so a stray "hecquin" inside
     // a song lyric or a longer sentence doesn't open the wake window.
     if (m.position(0) != 0) return false;
@@ -108,7 +130,9 @@ WakeWordGate::Decision WakeWordGate::decide(const std::string& transcript,
     const auto last_count = last_wake_at_.load(std::memory_order_acquire);
     if (last_count != 0) {
         const auto last = Clock::time_point(Clock::duration(last_count));
-        if (now - last < std::chrono::milliseconds(wake_window_ms_)) {
+        const int window =
+            wake_window_ms_.load(std::memory_order_acquire);
+        if (now - last < std::chrono::milliseconds(window)) {
             d.route = true;
             return d;
         }

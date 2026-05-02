@@ -37,6 +37,26 @@ struct IngestedFile {
  * extension (when compiled in) and runs idempotent migrations for the
  * English-learning subsystem.
  *
+ * Threading contract — single-threaded by design.
+ *
+ *   `LearningStore` is **not** internally synchronised.  Every consumer
+ *   (`RetrievalService`, `ProgressTracker`, `PronunciationDrillProcessor`,
+ *   `EnglishTutorProcessor`, `Ingestor`, the drill / tutor CLI binaries)
+ *   drives a single shared instance from the listener / main thread.
+ *   Concurrent calls into a single `LearningStore` are undefined: the
+ *   underlying `sqlite3*` handle is opened with `SQLITE_OPEN_NOMUTEX`-
+ *   equivalent ownership, the prepared-statement cache is plain
+ *   `unordered_map`, and the migration / `is_open()` flags are bare
+ *   booleans.
+ *
+ *   If a future feature needs background DB work (e.g. async ingest,
+ *   off-thread embedding writes), it must either (a) marshal back to the
+ *   listener thread, or (b) use a *separate* `LearningStore` instance
+ *   pointed at the same DB file — SQLite will serialise the file-level
+ *   locking for us.  Do **not** be tempted to add a `std::mutex` here:
+ *   that would silently legalise a contract this code base relies on
+ *   not legalising.
+ *
  * When `HECQUIN_WITH_SQLITE_VEC` is not defined the wrapper falls back to a
  * brute-force cosine search over an embedding BLOB column, so the rest of the
  * pipeline keeps working.

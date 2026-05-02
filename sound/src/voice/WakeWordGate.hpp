@@ -2,6 +2,7 @@
 
 #include <atomic>
 #include <chrono>
+#include <mutex>
 #include <regex>
 #include <string>
 
@@ -29,8 +30,13 @@ namespace hecquin::voice {
  * to route (with the wake phrase stripped if any) or a `Skip` verdict
  * to drop the utterance silently.
  *
- * Thread model: every method is safe to call concurrently.  Wake-window
- * timestamps are updated under `std::atomic`.
+ * Thread model: `decide` and the simple setters (`set_mode`,
+ * `set_ptt_pressed`) are safe to call concurrently.
+ * `apply_env_overrides` mutates the wake regex + window and is also
+ * safe to call concurrently with `decide` — both take a short mutex
+ * around the regex match.  Mutations to `mode_` / `ptt_pressed_` /
+ * `last_wake_at_` use atomics; the regex + source string are guarded
+ * by `re_mu_` because `std::regex` is not copyable into an atomic.
  */
 class WakeWordGate {
 public:
@@ -63,7 +69,21 @@ public:
     [[nodiscard]] Decision decide(const std::string& transcript,
                                   Clock::time_point now = Clock::now());
 
+    /**
+     * Tests-only hook: install a custom wake regex source.  Returns
+     * true on a clean compile, false (and leaves the previous regex
+     * unchanged) on a regex_error.  Production code installs the
+     * pattern through `HECQUIN_WAKE_PHRASE` / `apply_env_overrides`.
+     */
+    bool set_wake_pattern(const std::string& pattern);
+
+    /** Tests-only: read back the installed pattern source. */
+    std::string wake_pattern() const;
+
 private:
+    /** Wraps a `regex_search` call under `re_mu_`.  Returns true and
+     *  populates `stripped` when the wake phrase matched at the start
+     *  of `s`. */
     bool wake_phrase_match_(const std::string& s, std::string& stripped) const;
 
     std::atomic<Mode> mode_{Mode::Always};
@@ -73,10 +93,15 @@ private:
     std::atomic<Clock::rep> last_wake_at_{};
 
     /// How long after a wake phrase non-prefixed utterances still route.
-    int wake_window_ms_ = 8000;
+    std::atomic<int> wake_window_ms_{8000};
 
+    /// Mutex guarding `wake_re_` / `wake_re_src_`.  `std::regex` is
+    /// not safe to mutate concurrently with `regex_search`; we hold
+    /// the lock briefly across both reads (in `decide`) and writes
+    /// (in `apply_env_overrides`).
+    mutable std::mutex re_mu_;
     std::regex wake_re_;
-    std::string wake_re_src_; // for debug + comparison
+    std::string wake_re_src_; // for debug + tests
 };
 
 } // namespace hecquin::voice

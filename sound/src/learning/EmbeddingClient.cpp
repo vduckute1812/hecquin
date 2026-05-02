@@ -102,9 +102,9 @@ EmbeddingClient::embed_many(const std::vector<std::string>& texts) const {
     return embed_many_classified(texts).vectors;
 }
 
-std::optional<::HttpResult>
+std::optional<hecquin::ai::HttpResult>
 EmbeddingClient::attempt_with_backoff_(const std::string& body) const {
-    std::optional<::HttpResult> result;
+    std::optional<hecquin::ai::HttpResult> result;
     for (int attempt = 1; attempt <= kMaxAttempts; ++attempt) {
         result = http_->post_json(config_.embeddings_url, config_.api_key, body);
 
@@ -128,7 +128,7 @@ EmbeddingClient::attempt_with_backoff_(const std::string& body) const {
     return result;
 }
 
-void EmbeddingClient::classify_http_status_(const ::HttpResult& result,
+void EmbeddingClient::classify_http_status_(const hecquin::ai::HttpResult& result,
                                             EmbedManyResult& out) const {
     out.http_status = result.status;
     const auto kind = classify(result.status);

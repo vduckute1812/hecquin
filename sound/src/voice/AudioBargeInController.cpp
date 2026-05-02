@@ -35,6 +35,16 @@ void AudioBargeInController::Config::apply_env_overrides() {
     if (env::parse_float("HECQUIN_TTS_THRESHOLD_BOOST", fv)) {
         tts_threshold_boost = std::max(1.0f, fv);
     }
+    if (env::parse_float("HECQUIN_TTS_DUCK_GAIN_DB", fv)) {
+        const float clamped = std::clamp(fv, -60.0f, 0.0f);
+        tts_speak_duck_gain = db_to_linear(clamped);
+    }
+    if (env::parse_int("HECQUIN_TTS_DUCK_ATTACK_MS", iv)) {
+        tts_speak_attack_ms = std::max(0, iv);
+    }
+    if (env::parse_int("HECQUIN_TTS_DUCK_RELEASE_MS", iv)) {
+        tts_speak_release_ms = std::max(0, iv);
+    }
 }
 
 AudioBargeInController::AudioBargeInController() : AudioBargeInController(Config{}) {}

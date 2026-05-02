@@ -13,6 +13,7 @@
 
 #include <iostream>
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -82,8 +83,8 @@ int main() {
     // emissions verbatim.  No store, no progress tracker, no Piper.
     AppConfig app_cfg;
     PronunciationDrillProcessor drill(app_cfg,
-                                      /*store=*/nullptr,
-                                      /*progress=*/nullptr,
+                                      /*store=*/std::nullopt,
+                                      /*progress=*/std::nullopt,
                                       /*piper_model=*/"",
                                       PronunciationDrillConfig{});
 
@@ -127,7 +128,7 @@ int main() {
     {
         PronunciationDrillConfig cfg_no_hints;
         cfg_no_hints.max_feedback_words = 0;
-        PronunciationDrillProcessor drill_q(app_cfg, nullptr, nullptr, "", cfg_no_hints);
+        PronunciationDrillProcessor drill_q(app_cfg, std::nullopt, std::nullopt, "", cfg_no_hints);
         auto m2 = std::make_unique<PhonemeModel>();
         m2->set_fake_emissions_for_test(emissions);
         drill_q.set_phoneme_model_for_test(std::move(m2));
@@ -139,7 +140,7 @@ int main() {
 
     // No reference set → graceful error reply, not a crash.
     {
-        PronunciationDrillProcessor bare(app_cfg, nullptr, nullptr, "",
+        PronunciationDrillProcessor bare(app_cfg, std::nullopt, std::nullopt, "",
                                          PronunciationDrillConfig{});
         auto m3 = std::make_unique<PhonemeModel>();
         m3->set_fake_emissions_for_test(emissions);

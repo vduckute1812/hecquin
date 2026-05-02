@@ -3,6 +3,7 @@
 #include "actions/MusicAction.hpp"
 #include "common/StringUtils.hpp"
 
+#include <future>
 #include <iostream>
 #include <optional>
 #include <utility>
@@ -31,12 +32,32 @@ Action MusicSession::handle(const std::string& query) {
     std::cout << "[music] playing: " << track->title
               << "  (" << track->url << ")" << std::endl;
 
-    start_playback_thread_(*track);
+    std::promise<void> first_audio;
+    auto first_audio_fut = first_audio.get_future();
+    MusicPlayCallbacks cb;
+    bool fired = false;
+    cb.on_first_audio_frame = [&first_audio, &fired]() {
+        if (!fired) {
+            fired = true;
+            first_audio.set_value();
+        }
+    };
+
+    start_playback_thread_(*track, std::move(cb));
+
+    constexpr auto k_handshake = std::chrono::milliseconds(8000);
+    if (first_audio_fut.wait_for(k_handshake) != std::future_status::ready) {
+        std::cerr << "[music] no audio decoded before timeout — aborting start"
+                  << std::endl;
+        abort();
+        return MusicAction::playback(trimmed, /*ok=*/false, track->title);
+    }
 
     return MusicAction::playback(trimmed, /*ok=*/true, track->title);
 }
 
-void MusicSession::start_playback_thread_(const MusicTrack& track) {
+void MusicSession::start_playback_thread_(const MusicTrack& track,
+                                         MusicPlayCallbacks callbacks) {
     // Hand playback off to a background thread so the listener loop can
     // keep capturing voice and route subsequent commands ("stop music",
     // "pause music", …) while the song streams.  Any in-flight song
@@ -46,13 +67,12 @@ void MusicSession::start_playback_thread_(const MusicTrack& track) {
     abort_locked_();
 
     playing_.store(true, std::memory_order_release);
-    playback_thread_ = std::thread([this, t = track]() {
-        // Provider failures land in stderr inside the provider itself;
-        // the user has already heard the "Now playing …" TTS reply by
-        // the time `play()` is called, so a streaming failure mid-song
-        // just shortens the song.
-        const bool ok = provider_.play(t);
-        (void) ok;
+    playback_thread_ = std::thread([this, t = track, cb = std::move(callbacks)]() mutable {
+        // Provider failures land in stderr inside the provider itself.
+        // `handle()` waits for `on_first_audio_frame` before returning
+        // a success reply so the user does not hear "Now playing …" on a
+        // dead pipe; mid-song failures still just shorten playback.
+        (void)provider_.play(t, cb);
         playing_.store(false, std::memory_order_release);
     });
 }

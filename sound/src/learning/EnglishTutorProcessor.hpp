@@ -3,7 +3,6 @@
 #include "actions/Action.hpp"
 #include "config/ai/AiClientConfig.hpp"
 
-#include <future>
 #include <string>
 
 namespace hecquin::ai {
@@ -25,7 +24,14 @@ struct EnglishTutorConfig {
 
 /**
  * Lesson pipeline: RAG → chat → `GrammarCorrectionAction`; logs via `ProgressTracker`.
- * One caller at a time; `process` blocks on RAG+HTTP. CLI wires `process` in `setTutorCallback`.
+ *
+ * Synchronous-only: `process()` is the single public entry point and blocks
+ * on the RAG embedding round-trip plus the chat completion call.  The
+ * listener thread is the sole caller (wired via `setTutorCallback` in
+ * `EnglishTutorMain`), so an async variant would just shift the wait — the
+ * callback contract already accepts a blocking call there.  If a future
+ * caller needs background dispatch, build it on top of `process` rather
+ * than a `std::async` wrapper that captures `this` without join semantics.
  */
 class EnglishTutorProcessor {
 public:
@@ -44,7 +50,6 @@ public:
     }
 
     [[nodiscard]] Action process(const std::string& transcript);
-    [[nodiscard]] std::future<Action> process_async(const std::string& transcript);
 
     bool ready() const;
     const AiClientConfig& config() const { return ai_; }

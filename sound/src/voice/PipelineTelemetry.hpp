@@ -36,6 +36,15 @@ public:
     /** Secondary VAD gate rejected an utterance. */
     void emit_vad_rejection(const VadGateDecision& gate, int speech_ms);
 
+    /**
+     * The adaptive continue threshold was lifted by `adaptive_min_continue_thr`
+     * (hysteresis was chasing ambient noise below the clamp).  Rate-limited
+     * at the collector so calibration chatter doesn't flood the sink.
+     */
+    void emit_vad_continue_clamped(float raw_continue_thr,
+                                   float applied_continue_thr,
+                                   float start_thr);
+
     /** Whisper finished (or was filtered to empty). */
     void emit_whisper(long latency_ms, float no_speech_prob,
                       std::size_t chars, int speech_ms, bool ok);

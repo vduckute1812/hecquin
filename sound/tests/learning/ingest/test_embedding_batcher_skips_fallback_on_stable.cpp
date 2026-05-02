@@ -14,6 +14,8 @@
 
 namespace {
 
+using hecquin::ai::HttpResult;
+
 int fail(const char* message) {
     std::cerr << "[test_embedding_batcher_skips_fallback_on_stable] FAIL: "
               << message << std::endl;

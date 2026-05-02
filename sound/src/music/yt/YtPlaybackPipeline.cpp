@@ -5,6 +5,7 @@
 #include <array>
 #include <cstdint>
 #include <cstdlib>
+#include <functional>
 #include <iostream>
 
 namespace hecquin::music::yt {
@@ -12,7 +13,8 @@ namespace hecquin::music::yt {
 bool YtPlaybackPipeline::run(const std::string& shell_command,
                              int sample_rate_hz,
                              std::atomic<int>* child_pid_out,
-                             const std::atomic<bool>& aborted) {
+                             const std::atomic<bool>& aborted,
+                             const std::function<void()>& on_first_audio) {
     auto sp = hecquin::common::Subprocess::spawn_read(shell_command);
     if (!sp.valid()) return false;
     if (child_pid_out) child_pid_out->store(sp.pid());
@@ -29,6 +31,7 @@ bool YtPlaybackPipeline::run(const std::string& shell_command,
     }
 
     bool got_audio = false;
+    bool notified_first = false;
     std::array<std::int16_t, 4096> samples{};
     // Read raw s16le from the ffmpeg stdout end of the pipeline in
     // fixed-size chunks and push into the player.  Short reads are fine
@@ -44,6 +47,10 @@ bool YtPlaybackPipeline::run(const std::string& shell_command,
         if (n == 0) continue;
         got_audio = true;
         player_->push(samples.data(), n);
+        if (!notified_first && on_first_audio) {
+            notified_first = true;
+            on_first_audio();
+        }
         if (aborted.load()) break;
     }
 

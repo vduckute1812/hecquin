@@ -49,6 +49,19 @@ public:
     SDL_AudioDeviceID deviceId() const { return device_id_; }
 
     /**
+     * Open-time sanity check: temporarily resume the device, wait
+     * `duration_ms` for samples to arrive, then pause again and
+     * clear whatever was captured.  Returns the number of samples
+     * the SDL callback actually delivered during the window.
+     *
+     * Used by `VoiceApp::init` to detect the "AUDIO_DEVICE_INDEX=-1
+     * picked a silent default" case that would otherwise show up only
+     * as the noise-floor tracker timing out 2 s into calibration.
+     * No-op (returns 0) when the device is not open.
+     */
+    std::size_t probeSignal(int duration_ms = 500);
+
+    /**
      * RAII mute helper: pauses the device + clears the ring on construction,
      * clears + resumes on destruction.  Use this around any TTS playback
      * block so the mic cannot re-capture the speaker output as "voice".

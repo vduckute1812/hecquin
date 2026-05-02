@@ -63,6 +63,18 @@ inline bool parse_int(const char* name, int& out) {
     }
 }
 
+inline bool parse_long(const char* name, long& out) {
+    const char* raw = detail::raw_or_null(name);
+    if (!raw) return false;
+    try {
+        out = std::stol(raw);
+        return true;
+    } catch (...) {
+        detail::warn_invalid(name, raw);
+        return false;
+    }
+}
+
 inline bool parse_size(const char* name, std::size_t& out) {
     const char* raw = detail::raw_or_null(name);
     if (!raw) return false;

@@ -7,9 +7,9 @@
 #include <string>
 #include <vector>
 
-struct HttpResult;
-
 namespace hecquin::ai {
+
+struct HttpResult;
 class IHttpClient;
 class CurlHttpClient;
 }
@@ -94,10 +94,12 @@ public:
 
 private:
     /** Retry loop. nullopt = transport failure on every attempt. */
-    std::optional<::HttpResult> attempt_with_backoff_(const std::string& body) const;
+    std::optional<hecquin::ai::HttpResult>
+    attempt_with_backoff_(const std::string& body) const;
 
     /** Sets http_status + retry_per_chunk_worthwhile from a transport-OK response. */
-    void classify_http_status_(const ::HttpResult& result, EmbedManyResult& out) const;
+    void classify_http_status_(const hecquin::ai::HttpResult& result,
+                               EmbedManyResult& out) const;
 
     /** On parse failure, probe whether the body's `embedding` array is wrong-sized. */
     void detect_dim_mismatch_in_(const std::string& body, EmbedManyResult& out) const;

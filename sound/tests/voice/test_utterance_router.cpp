@@ -16,6 +16,7 @@
 #include <optional>
 #include <string>
 
+using hecquin::ai::HttpResult;
 using hecquin::ai::IHttpClient;
 using hecquin::voice::UtteranceRouter;
 

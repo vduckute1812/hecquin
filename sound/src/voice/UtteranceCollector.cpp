@@ -63,7 +63,27 @@ void UtteranceCollector::recompute_thresholds_() {
     } else {
         dynamic_start_thr_ = cfg_.voice_rms_threshold;
     }
-    dynamic_continue_thr_ = std::max(0.0f, cfg_.k_continue) * dynamic_start_thr_;
+    const float raw_continue_thr =
+        std::max(0.0f, cfg_.k_continue) * dynamic_start_thr_;
+    dynamic_continue_thr_ = raw_continue_thr;
+    // Hard lower clamp so a floor that calibrated tiny doesn't leave
+    // the continue threshold below room hiss (which would let the
+    // recording state latch until the safety net fires).
+    if (auto_on && cfg_.adaptive_min_continue_thr > 0.0f) {
+        dynamic_continue_thr_ =
+            std::max(dynamic_continue_thr_, cfg_.adaptive_min_continue_thr);
+    }
+    if (continue_clamp_cb_ && auto_on && cfg_.adaptive_min_continue_thr > 0.0f &&
+        dynamic_continue_thr_ > raw_continue_thr + 1e-6f) {
+        const auto now = std::chrono::steady_clock::now();
+        const bool first =
+            last_continue_clamp_cb_.time_since_epoch().count() == 0;
+        if (first || now - last_continue_clamp_cb_ >= std::chrono::seconds(5)) {
+            last_continue_clamp_cb_ = now;
+            continue_clamp_cb_(raw_continue_thr, dynamic_continue_thr_,
+                               dynamic_start_thr_);
+        }
+    }
 
     if (auto_on && !cfg_.min_utterance_rms_pinned) {
         dynamic_min_utt_rms_ = std::clamp(cfg_.k_utt * floor,
@@ -155,10 +175,67 @@ UtteranceCollector::end_reason_(const CollectedUtterance& u) const {
         u.silence_ms >= cfg_.end_silence_ms) {
         return EndReason::Silence;
     }
+    // Reactive early-close on a low recent voiced ratio:  the recording
+    // is "open" because frame_rms is grazing the continue threshold,
+    // but the voiced fraction inside the rolling window is too small
+    // to be real speech.  Catches the noise-plume case before we hit
+    // the much-larger `max_utterance_ms` safety net.
+    if (cfg_.early_close_voiced_ratio > 0.0f &&
+        recent_voiced_capacity_ > 0 &&
+        u.speech_ms >= cfg_.early_close_min_speech_ms) {
+        // `u.total_frames` is the number of ticks since the recording
+        // started; the ring buffer's `assign(cap, 0)` pre-fills with
+        // zeros so we can't trust `recent_voiced_.size()` as the fill
+        // count.  Once we have at least `cap` real pushes the rolling
+        // window is fully real samples; before that we use the partial
+        // fill (capped at cap).
+        const int filled =
+            std::min(recent_voiced_capacity_, u.total_frames);
+        if (filled >= recent_voiced_capacity_) {
+            const float ratio =
+                static_cast<float>(recent_voiced_sum_) /
+                static_cast<float>(filled);
+            if (ratio < cfg_.early_close_voiced_ratio) {
+                return EndReason::EarlyLowActivity;
+            }
+        }
+    }
     if (cfg_.max_utterance_ms > 0 && u.speech_ms >= cfg_.max_utterance_ms) {
         return EndReason::MaxDuration;
     }
     return EndReason::None;
+}
+
+void UtteranceCollector::reset_recent_voiced_window_() {
+    if (cfg_.early_close_voiced_ratio <= 0.0f) {
+        recent_voiced_.clear();
+        recent_voiced_.shrink_to_fit();
+        recent_voiced_head_ = 0;
+        recent_voiced_sum_ = 0;
+        recent_voiced_capacity_ = 0;
+        return;
+    }
+    const int poll = std::max(1, cfg_.poll_interval_ms);
+    const int window_ms = std::max(poll, cfg_.early_close_window_ms);
+    const int cap = std::max(1, window_ms / poll);
+    recent_voiced_capacity_ = cap;
+    recent_voiced_.assign(static_cast<std::size_t>(cap), 0u);
+    recent_voiced_head_ = 0;
+    recent_voiced_sum_ = 0;
+}
+
+void UtteranceCollector::push_recent_voiced_(bool voiced) {
+    if (cfg_.early_close_voiced_ratio <= 0.0f ||
+        recent_voiced_capacity_ <= 0) {
+        return;
+    }
+    const std::size_t cap = recent_voiced_.size();
+    if (cap == 0) return;  // shouldn't happen, but defend.
+    std::uint8_t& slot = recent_voiced_[recent_voiced_head_];
+    recent_voiced_sum_ -= slot;
+    slot = voiced ? 1u : 0u;
+    recent_voiced_sum_ += slot;
+    recent_voiced_head_ = (recent_voiced_head_ + 1) % cap;
 }
 
 void UtteranceCollector::announce_recording_complete_(EndReason reason) const {
@@ -169,6 +246,13 @@ void UtteranceCollector::announce_recording_complete_(EndReason reason) const {
         // to settle higher.
         std::cout << "⏹ Recording complete (max duration "
                   << cfg_.max_utterance_ms << " ms reached)" << std::endl;
+    } else if (reason == EndReason::EarlyLowActivity) {
+        // The reactive early-close path closed the recording because
+        // the rolling voiced ratio fell below
+        // `cfg_.early_close_voiced_ratio` — i.e. the recording was
+        // tracking ambient noise rather than real speech.
+        std::cout << "⏹ Recording complete (low recent activity)"
+                  << std::endl;
     } else {
         std::cout << "⏹ Recording complete!" << std::endl;
     }
@@ -209,10 +293,14 @@ UtteranceCollector::TickResult UtteranceCollector::poll_tick_(
     if (has_voice && !collecting) {
         collecting = true;
         u = {};
+        // Reset the rolling voiced-frame ring buffer so the new
+        // utterance starts judging activity from scratch.
+        reset_recent_voiced_window_();
         std::cout << "🔴 Recording..." << std::endl;
     }
 
     if (collecting) {
+        push_recent_voiced_(has_voice);
         advance_collection_(u, has_voice);
         const EndReason reason = end_reason_(u);
         if (reason != EndReason::None) {

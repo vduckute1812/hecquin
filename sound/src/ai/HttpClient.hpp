@@ -3,6 +3,8 @@
 #include <optional>
 #include <string>
 
+namespace hecquin::ai {
+
 struct HttpResult {
     long status;
     std::string body;
@@ -16,3 +18,5 @@ std::optional<HttpResult> http_post_json(const std::string& url,
                                          const std::string& bearer_token,
                                          const std::string& json_body,
                                          long timeout_seconds = 60);
+
+} // namespace hecquin::ai

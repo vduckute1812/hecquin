@@ -58,13 +58,32 @@ public:
         float tts_threshold_boost  = 2.0f;
 
         /**
+         * TTS-over-music duck profile.  When the assistant starts
+         * speaking and music is active, the controller ramps the
+         * music gain to `tts_speak_duck_gain` over
+         * `tts_speak_attack_ms`, and restores unity over
+         * `tts_speak_release_ms` when the speak window closes.
+         *
+         * These used to be magic numbers in `TtsResponsePlayer`; moving
+         * them here lets operators tune the ducking depth/ramp without
+         * rebuilding (`HECQUIN_TTS_DUCK_GAIN_DB`, `HECQUIN_TTS_DUCK_ATTACK_MS`,
+         * `HECQUIN_TTS_DUCK_RELEASE_MS`).
+         */
+        float tts_speak_duck_gain  = 0.20f;
+        int   tts_speak_attack_ms  = 80;
+        int   tts_speak_release_ms = 200;
+
+        /**
          * Override defaults from env vars:
-         *   HECQUIN_DUCK_GAIN_DB         (default -12 dB)
-         *   HECQUIN_DUCK_ATTACK_MS       (default 30)
-         *   HECQUIN_DUCK_RELEASE_MS      (default 250)
-         *   HECQUIN_DUCK_HOLD_MS         (default 200)
-         *   HECQUIN_TTS_BARGE_IN         (1 = on, 0 = legacy MuteGuard)
-         *   HECQUIN_TTS_THRESHOLD_BOOST  (default 2.0)
+         *   HECQUIN_DUCK_GAIN_DB           (default -12 dB)
+         *   HECQUIN_DUCK_ATTACK_MS         (default 30)
+         *   HECQUIN_DUCK_RELEASE_MS        (default 250)
+         *   HECQUIN_DUCK_HOLD_MS           (default 200)
+         *   HECQUIN_TTS_BARGE_IN           (1 = on, 0 = legacy MuteGuard)
+         *   HECQUIN_TTS_THRESHOLD_BOOST    (default 2.0)
+         *   HECQUIN_TTS_DUCK_GAIN_DB       (default -14 dB)
+         *   HECQUIN_TTS_DUCK_ATTACK_MS     (default 80)
+         *   HECQUIN_TTS_DUCK_RELEASE_MS    (default 200)
          */
         void apply_env_overrides();
     };

@@ -4,6 +4,7 @@
 #include "tts/playback/StreamingSdlPlayer.hpp"
 
 #include <atomic>
+#include <functional>
 #include <memory>
 #include <string>
 
@@ -37,13 +38,16 @@ public:
      *                       before `run()` returns.  May be null.
      * @param aborted        cooperatively polled inside the read loop.
      *                       `request_abort()` flips it externally.
+     * @param on_first_audio  optional; invoked once after the first
+     *                        non-empty PCM chunk is pushed to SDL.
      * @return true iff at least one PCM sample was decoded and the
      *         loop wasn't aborted mid-stream.
      */
     bool run(const std::string& shell_command,
              int sample_rate_hz,
              std::atomic<int>* child_pid_out,
-             const std::atomic<bool>& aborted);
+             const std::atomic<bool>& aborted,
+             const std::function<void()>& on_first_audio = {});
 
     /** Best-effort SDL pause toggles forwarded to the active player. */
     void set_paused(bool paused);

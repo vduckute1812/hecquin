@@ -63,7 +63,7 @@ sequenceDiagram
 
     opt english_tutor binary
         Main->>Tut: build TutorContextBuilder + ChatHttpClient chain
-        Main->>Lst: setTutorCallback(tutor.process_async)
+        Main->>Lst: setTutorCallback(tutor.process)
     end
     opt pronunciation_drill binary
         Main->>Drl: load() — resolve_sentence_pool_ + prime_picker_

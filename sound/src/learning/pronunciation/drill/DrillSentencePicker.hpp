@@ -3,6 +3,8 @@
 #include "learning/pronunciation/G2P.hpp"
 
 #include <cstddef>
+#include <functional>
+#include <optional>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -35,7 +37,14 @@ public:
         double weakness_bias = 0.7;
     };
 
-    DrillSentencePicker(LearningStore* store, Config cfg);
+    using LearningStoreRef = std::optional<std::reference_wrapper<LearningStore>>;
+
+    /**
+     * `store` is the DB-backed weakest-phoneme oracle.  Pass
+     * `std::nullopt` when no DB is available — the picker will fall
+     * back to round-robin.
+     */
+    DrillSentencePicker(LearningStoreRef store, Config cfg);
 
     /**
      * Install a pool + build the phoneme index.  Pass `g2p = nullptr`
@@ -58,7 +67,7 @@ private:
     void build_phoneme_index_(G2P* g2p);
     std::size_t choose_weak_biased_index_();
 
-    LearningStore* store_ = nullptr;
+    LearningStoreRef store_;
     Config cfg_;
     std::vector<std::string> pool_;
     std::size_t next_idx_ = 0;

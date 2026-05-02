@@ -23,6 +23,8 @@ namespace fs = std::filesystem;
 
 namespace {
 
+using hecquin::ai::HttpResult;
+
 int fail(const char* message) {
     std::cerr << "[test_ingestor_cwd_independence] FAIL: " << message << std::endl;
     return 1;

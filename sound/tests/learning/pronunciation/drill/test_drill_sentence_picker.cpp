@@ -6,6 +6,7 @@
 
 #include <cstdlib>
 #include <iostream>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -27,7 +28,7 @@ void expect(bool cond, const char* label) {
 int main() {
     // 1. With no store and no G2P → pure round-robin.
     {
-        DrillSentencePicker picker(nullptr, {});
+        DrillSentencePicker picker(std::nullopt, {});
         picker.set_pool({"one", "two", "three"});
 
         // Cycle two full rounds: 3 sentences × 2 = 6 draws must land on
@@ -42,14 +43,14 @@ int main() {
 
     // 2. Empty pool → `next()` returns "" and `empty()` holds.
     {
-        DrillSentencePicker picker(nullptr, {});
+        DrillSentencePicker picker(std::nullopt, {});
         expect(picker.empty(), "default picker is empty");
         expect(picker.next().empty(), "empty pool returns empty string");
     }
 
     // 3. `load()` resets the round-robin cursor to 0.
     {
-        DrillSentencePicker picker(nullptr, {});
+        DrillSentencePicker picker(std::nullopt, {});
         picker.set_pool({"a", "b"});
         (void)picker.next();          // cursor → 1
         (void)picker.next();          // cursor → 2 (wraps later)

@@ -4,6 +4,7 @@
 #include "music/MusicProvider.hpp"
 
 #include <atomic>
+#include <chrono>
 #include <mutex>
 #include <string>
 #include <thread>
@@ -19,9 +20,11 @@ namespace hecquin::music {
  *
  *   1. `handle(query)` searches synchronously (cheap; one yt-dlp call)
  *      and, on a hit, dispatches `provider_.play(track)` to a private
- *      background thread.  The method returns a "Now playing …"
- *      `Action` immediately so the listener's poll loop is freed up
- *      and can keep capturing voice while audio streams.
+     *      background thread.  The method waits (with a short timeout)
+     *      for the first decoded PCM frame before returning success so
+     *      the assistant does not announce "Now playing" when yt-dlp /
+     *      ffmpeg fails immediately.  After that handshake the listener
+     *      stays free to capture voice while audio streams.
  *   2. While the song streams, `abort()` / `pause()` / `resume()` may
  *      be invoked from the listener thread to control playback.
  *   3. When `play()` returns (drained or aborted) the background
@@ -85,7 +88,8 @@ private:
      * thread for `track` while holding `thread_mu_`.  Called from
      * `handle()` once we know we have a hit.
      */
-    void start_playback_thread_(const MusicTrack& track);
+    void start_playback_thread_(const MusicTrack& track,
+                                MusicPlayCallbacks callbacks);
 
     MusicProvider&    provider_;
     std::mutex        thread_mu_;

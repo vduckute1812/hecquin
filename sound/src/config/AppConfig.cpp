@@ -3,6 +3,9 @@
 #include "common/PathUtils.hpp"
 
 #include <filesystem>
+#include <initializer_list>
+#include <iostream>
+#include <string>
 
 static constexpr const char* kDefaultSystemPrompt =
     "You are a voice assistant on a smart speaker. "
@@ -15,6 +18,42 @@ static constexpr const char* kDefaultTutorPrompt =
     "Format: 1) You said: ... 2) Better: ... 3) one short reason. "
     "No markdown, no bullet points, no lists. "
     "Use the provided reference snippets only if they are relevant.";
+
+namespace {
+
+/** Assign `store.resolve(key)` to `dst` only when the env value is
+ *  non-empty.  Used everywhere the config field is a plain string. */
+void resolve_string(const ConfigStore& store, const char* key, std::string& dst) {
+    const std::string v = store.resolve(key);
+    if (!v.empty()) dst = v;
+}
+
+/** Same shape, but parses the env value as an integer; logs a single
+ *  `[env] ignoring invalid …` line on a parse failure and leaves `dst`
+ *  untouched.  Mirrors the warning style used elsewhere in the codebase. */
+void resolve_int(const ConfigStore& store, const char* key, int& dst) {
+    const std::string v = store.resolve(key);
+    if (v.empty()) return;
+    try {
+        dst = std::stoi(v);
+    } catch (...) {
+        std::cerr << "[env] ignoring invalid " << key << "=" << v
+                  << std::endl;
+    }
+}
+
+/**
+ * One row in the env-key→string-field table.  Members marked
+ * `is_path = true` are anchored against the config-file directory at
+ * the end of `load()` so relative paths work regardless of CWD.
+ */
+struct StringBinding {
+    const char* key;
+    std::string* dst;
+    bool is_path = false;
+};
+
+} // namespace
 
 AppConfig AppConfig::load(const char* env_file_path, const char* prompts_dir) {
     const ConfigStore store = ConfigStore::from_path(env_file_path);
@@ -34,102 +73,43 @@ AppConfig AppConfig::load(const char* env_file_path, const char* prompts_dir) {
         cfg.ai.tutor_system_prompt = kDefaultTutorPrompt;
     }
 
-    const std::string idx = store.resolve("AUDIO_DEVICE_INDEX");
-    if (!idx.empty()) {
-        cfg.audio.device_index = std::stoi(idx);
+    // Audio device — a parse-failure used to abort startup with an
+    // uncaught `std::out_of_range`; resolve_int now warns + falls back
+    // to the default index.
+    resolve_int(store, "AUDIO_DEVICE_INDEX", cfg.audio.device_index);
+
+    // String / path fields, table-driven so future additions don't drift
+    // between the resolve loop and the anchor loop below.
+    const StringBinding bindings[] = {
+        { "HECQUIN_LEARNING_DB_PATH",         &cfg.learning.db_path,                true  },
+        { "HECQUIN_LEARNING_CURRICULUM_DIR",  &cfg.learning.curriculum_dir,         true  },
+        { "HECQUIN_LEARNING_CUSTOM_DIR",      &cfg.learning.custom_dir,             true  },
+        { "HECQUIN_LESSON_START_PHRASES",     &cfg.learning.lesson_start_phrases,   false },
+        { "HECQUIN_LESSON_END_PHRASES",       &cfg.learning.lesson_end_phrases,     false },
+        { "HECQUIN_DRILL_START_PHRASES",      &cfg.learning.drill_start_phrases,    false },
+        { "HECQUIN_DRILL_END_PHRASES",        &cfg.learning.drill_end_phrases,      false },
+        { "HECQUIN_INGEST_API_LOG_CSV",       &cfg.learning.ingest_api_log_csv,     true  },
+        { "HECQUIN_INGEST_RUN_SUMMARY_CSV",   &cfg.learning.ingest_run_summary_csv, true  },
+        { "HECQUIN_PRONUNCIATION_MODEL",      &cfg.pronunciation.model_path,        true  },
+        { "HECQUIN_PRONUNCIATION_VOCAB",      &cfg.pronunciation.vocab_path,        true  },
+        { "HECQUIN_ONNX_PROVIDER",            &cfg.pronunciation.onnx_provider,     false },
+        { "HECQUIN_DRILL_SENTENCES",          &cfg.pronunciation.drill_sentences_path, true },
+        { "HECQUIN_PRONUNCIATION_CALIBRATION", &cfg.pronunciation.calibration_path, true  },
+        { "HECQUIN_LOCALE",                   &cfg.locale.ui,                       false },
+        { "HECQUIN_WHISPER_LANGUAGE",         &cfg.locale.whisper_language,         false },
+        { "HECQUIN_ESPEAK_VOICE",             &cfg.locale.espeak_voice,             false },
+        { "HECQUIN_MUSIC_PROVIDER",           &cfg.music.provider,                  false },
+        { "HECQUIN_YT_COOKIES_FILE",          &cfg.music.cookies_file,              true  },
+        { "HECQUIN_YT_DLP_BIN",               &cfg.music.yt_dlp_binary,             false },
+        { "HECQUIN_FFMPEG_BIN",               &cfg.music.ffmpeg_binary,             false },
+    };
+    for (const auto& b : bindings) {
+        resolve_string(store, b.key, *b.dst);
     }
 
-    const std::string db_path = store.resolve("HECQUIN_LEARNING_DB_PATH");
-    if (!db_path.empty()) {
-        cfg.learning.db_path = db_path;
-    }
-    const std::string curriculum = store.resolve("HECQUIN_LEARNING_CURRICULUM_DIR");
-    if (!curriculum.empty()) {
-        cfg.learning.curriculum_dir = curriculum;
-    }
-    const std::string custom = store.resolve("HECQUIN_LEARNING_CUSTOM_DIR");
-    if (!custom.empty()) {
-        cfg.learning.custom_dir = custom;
-    }
-    const std::string topk = store.resolve("HECQUIN_LEARNING_RAG_TOPK");
-    if (!topk.empty()) {
-        try {
-            cfg.learning.rag_top_k = std::stoi(topk);
-        } catch (...) {
-        }
-    }
-    const std::string start_phrases = store.resolve("HECQUIN_LESSON_START_PHRASES");
-    if (!start_phrases.empty()) {
-        cfg.learning.lesson_start_phrases = start_phrases;
-    }
-    const std::string end_phrases = store.resolve("HECQUIN_LESSON_END_PHRASES");
-    if (!end_phrases.empty()) {
-        cfg.learning.lesson_end_phrases = end_phrases;
-    }
-    const std::string drill_start = store.resolve("HECQUIN_DRILL_START_PHRASES");
-    if (!drill_start.empty()) {
-        cfg.learning.drill_start_phrases = drill_start;
-    }
-    const std::string drill_end = store.resolve("HECQUIN_DRILL_END_PHRASES");
-    if (!drill_end.empty()) {
-        cfg.learning.drill_end_phrases = drill_end;
-    }
-    const std::string drill_pass = store.resolve("HECQUIN_DRILL_PASS_THRESHOLD");
-    if (!drill_pass.empty()) {
-        try {
-            cfg.learning.drill_pass_threshold = std::stoi(drill_pass);
-        } catch (...) {
-        }
-    }
-    const std::string ingest_api_log = store.resolve("HECQUIN_INGEST_API_LOG_CSV");
-    if (!ingest_api_log.empty()) {
-        cfg.learning.ingest_api_log_csv = ingest_api_log;
-    }
-    const std::string ingest_run_summary = store.resolve("HECQUIN_INGEST_RUN_SUMMARY_CSV");
-    if (!ingest_run_summary.empty()) {
-        cfg.learning.ingest_run_summary_csv = ingest_run_summary;
-    }
-
-    const std::string pron_model = store.resolve("HECQUIN_PRONUNCIATION_MODEL");
-    if (!pron_model.empty()) {
-        cfg.pronunciation.model_path = pron_model;
-    }
-    const std::string pron_vocab = store.resolve("HECQUIN_PRONUNCIATION_VOCAB");
-    if (!pron_vocab.empty()) {
-        cfg.pronunciation.vocab_path = pron_vocab;
-    }
-    const std::string pron_provider = store.resolve("HECQUIN_ONNX_PROVIDER");
-    if (!pron_provider.empty()) {
-        cfg.pronunciation.onnx_provider = pron_provider;
-    }
-    const std::string drill_sentences = store.resolve("HECQUIN_DRILL_SENTENCES");
-    if (!drill_sentences.empty()) {
-        cfg.pronunciation.drill_sentences_path = drill_sentences;
-    }
-    const std::string calibration = store.resolve("HECQUIN_PRONUNCIATION_CALIBRATION");
-    if (!calibration.empty()) {
-        cfg.pronunciation.calibration_path = calibration;
-    }
-
-    const std::string ui_locale = store.resolve("HECQUIN_LOCALE");
-    if (!ui_locale.empty()) cfg.locale.ui = ui_locale;
-    const std::string whisper_lang = store.resolve("HECQUIN_WHISPER_LANGUAGE");
-    if (!whisper_lang.empty()) cfg.locale.whisper_language = whisper_lang;
-    const std::string espeak_voice = store.resolve("HECQUIN_ESPEAK_VOICE");
-    if (!espeak_voice.empty()) cfg.locale.espeak_voice = espeak_voice;
-
-    const std::string music_provider = store.resolve("HECQUIN_MUSIC_PROVIDER");
-    if (!music_provider.empty()) cfg.music.provider = music_provider;
-    const std::string yt_cookies = store.resolve("HECQUIN_YT_COOKIES_FILE");
-    if (!yt_cookies.empty()) cfg.music.cookies_file = yt_cookies;
-    const std::string yt_dlp_bin = store.resolve("HECQUIN_YT_DLP_BIN");
-    if (!yt_dlp_bin.empty()) cfg.music.yt_dlp_binary = yt_dlp_bin;
-    const std::string ffmpeg_bin = store.resolve("HECQUIN_FFMPEG_BIN");
-    if (!ffmpeg_bin.empty()) cfg.music.ffmpeg_binary = ffmpeg_bin;
-    const std::string music_rate = store.resolve("HECQUIN_MUSIC_SAMPLE_RATE");
-    if (!music_rate.empty()) {
-        try { cfg.music.sample_rate_hz = std::stoi(music_rate); } catch (...) {}
-    }
+    resolve_int(store, "HECQUIN_LEARNING_RAG_TOPK",     cfg.learning.rag_top_k);
+    resolve_int(store, "HECQUIN_DRILL_PASS_THRESHOLD",  cfg.learning.drill_pass_threshold);
+    resolve_int(store, "HECQUIN_MUSIC_SAMPLE_RATE",     cfg.music.sample_rate_hz);
 
     // Anchor relative paths against the config file's dir (cwd-independent).
     std::string base_dir;
@@ -139,18 +119,9 @@ AppConfig AppConfig::load(const char* env_file_path, const char* prompts_dir) {
     auto anchor = [&](std::string& s) {
         s = hecquin::common::resolve_against_dir(base_dir, std::move(s));
     };
-    for (std::string* p : {
-        &cfg.learning.db_path,
-        &cfg.learning.curriculum_dir,
-        &cfg.learning.custom_dir,
-        &cfg.learning.ingest_api_log_csv,
-        &cfg.learning.ingest_run_summary_csv,
-        &cfg.pronunciation.model_path,
-        &cfg.pronunciation.vocab_path,
-        &cfg.pronunciation.calibration_path,
-        &cfg.pronunciation.drill_sentences_path,
-        &cfg.music.cookies_file,
-    }) anchor(*p);
+    for (const auto& b : bindings) {
+        if (b.is_path) anchor(*b.dst);
+    }
 
     return cfg;
 }

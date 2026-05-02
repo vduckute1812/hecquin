@@ -1,8 +1,9 @@
 // MusicSession exercises a FakeMusicProvider so we can verify:
 //   - empty query → MusicNotFound without hitting the provider.
 //   - search failure → MusicNotFound with the "couldn't find" reply.
-//   - search success → MusicPlayback(title) returns immediately while
-//     play() runs on a background thread (the new async contract).
+//   - search success → the session waits for first-audio handshake (fake
+//     provider signals immediately) then returns MusicPlayback while play()
+//     continues on a worker thread.
 //   - abort() during playback breaks the provider's blocking play() via
 //     stop() and joins the worker thread cleanly.
 //   - pause() / resume() forward through the session only while a song is
@@ -24,6 +25,7 @@
 #include <thread>
 
 using hecquin::music::MusicProvider;
+using hecquin::music::MusicPlayCallbacks;
 using hecquin::music::MusicSession;
 using hecquin::music::MusicTrack;
 
@@ -64,9 +66,18 @@ public:
         last_query = query;
         return search_result;
     }
-    bool play(const MusicTrack&) override {
+    bool play(const MusicTrack&, const MusicPlayCallbacks& cb = {}) override {
         ++play_calls;
-        if (!blocking_play) return play_result;
+        auto maybe_signal = [&]() {
+            if (play_result && cb.on_first_audio_frame) {
+                cb.on_first_audio_frame();
+            }
+        };
+        if (!blocking_play) {
+            maybe_signal();
+            return play_result;
+        }
+        maybe_signal();
         std::unique_lock<std::mutex> lk(mu_);
         cv_.wait(lk, [this]() { return release_.load(); });
         return play_result;

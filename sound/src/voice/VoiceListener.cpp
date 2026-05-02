@@ -4,15 +4,15 @@
 #include "voice/ActionSideEffectRegistry.hpp"
 #include "voice/PipelineTelemetry.hpp"
 #include "voice/SecondaryVadGate.hpp"
+#include "voice/ThinkingScheduler.hpp"
 #include "voice/TtsResponsePlayer.hpp"
 #include "voice/UtteranceCollector.hpp"
 #include "voice/UtteranceRouter.hpp"
 
+#include <cctype>
 #include <chrono>
-#include <condition_variable>
+#include <cstddef>
 #include <iostream>
-#include <mutex>
-#include <thread>
 #include <utility>
 
 // VoiceListenerConfig::apply_env_overrides moved to
@@ -51,6 +51,8 @@ VoiceListener::VoiceListener(WhisperEngine& whisper,
     player_ = std::make_unique<hecquin::voice::TtsResponsePlayer>(
         capture_, piper_model_path_, &barge_, collector_.get());
     telemetry_ = std::make_unique<hecquin::voice::PipelineTelemetry>();
+    thinking_scheduler_ =
+        std::make_unique<hecquin::voice::ThinkingScheduler>();
     music_fx_.set_collector(collector_.get());
     music_fx_.set_barge_controller(&barge_);
 
@@ -79,6 +81,12 @@ VoiceListener::VoiceListener(WhisperEngine& whisper,
             barge_.tick(
                 hecquin::voice::AudioBargeInController::Clock::now());
         });
+    collector_->set_continue_clamp_callback(
+        [this](float raw_c, float applied_c, float start_t) {
+            if (telemetry_) {
+                telemetry_->emit_vad_continue_clamped(raw_c, applied_c, start_t);
+            }
+        });
 }
 
 VoiceListener::~VoiceListener() = default;
@@ -94,7 +102,15 @@ VoiceListener::VadGateDecision VoiceListener::evaluate_secondary_gate(
     const auto d = hecquin::voice::evaluate_secondary_gate(
         voiced_frames, effective_frames, mean_rms,
         cfg.min_utterance_rms, cfg.min_voiced_frame_ratio);
-    return {d.accept, d.too_quiet, d.too_sparse, d.mean_rms, d.voiced_ratio};
+    VoiceListener::VadGateDecision out;
+    out.accept = d.accept;
+    out.too_quiet = d.too_quiet;
+    out.too_sparse = d.too_sparse;
+    out.too_flat = d.too_flat;
+    out.mean_rms = d.mean_rms;
+    out.voiced_ratio = d.voiced_ratio;
+    out.crest_factor = d.crest_factor;
+    return out;
 }
 
 const char* VoiceListener::current_mode_label_() const {
@@ -182,6 +198,11 @@ void VoiceListener::log_vad_rejection_(
                   << gate.voiced_ratio << " < "
                   << cfg_.min_voiced_frame_ratio << ")" << std::endl;
     }
+    if (gate.too_flat) {
+        std::cout << "🔇 Skipping noise (too_flat: crest_factor="
+                  << gate.crest_factor << " < "
+                  << cfg_.min_crest_factor << ")" << std::endl;
+    }
     std::cout << std::endl;
 }
 
@@ -216,7 +237,8 @@ bool VoiceListener::gate_accepts_(
         collector_->effective_min_utterance_rms();
     const auto gate = hecquin::voice::evaluate_for_utterance(
         utt, cfg_.poll_interval_ms,
-        effective_min_utt_rms, cfg_.min_voiced_frame_ratio);
+        effective_min_utt_rms, cfg_.min_voiced_frame_ratio,
+        cfg_.min_crest_factor);
 
     if (gate.accept) return true;
 
@@ -231,6 +253,36 @@ bool VoiceListener::gate_accepts_(
 std::string VoiceListener::transcribe_and_emit_(
     const hecquin::voice::CollectedUtterance& utt) {
     std::string transcript = whisper_.transcribe(utt.pcm);
+
+    // Post-Whisper strict cross-check: the basic post-filter accepts
+    // any transcript whose alnum count >= cfg.min_alnum_chars and whose
+    // worst no_speech_prob <= cfg.no_speech_prob_max.  That still lets
+    // through borderline hallucinations like "Our bill takes" where the
+    // text is short AND the no_speech_prob landed in the upper half of
+    // the band.  Drop those before they burn a cloud LLM call.
+    if (!transcript.empty() && cfg_.post_whisper_strict_min_alnum > 0) {
+        std::size_t alnum = 0;
+        for (char c : transcript) {
+            if (std::isalnum(static_cast<unsigned char>(c))) ++alnum;
+        }
+        const bool short_alnum =
+            static_cast<int>(alnum) < cfg_.post_whisper_strict_min_alnum;
+        const bool high_no_speech =
+            whisper_.last_no_speech_prob() >=
+            cfg_.post_whisper_strict_no_speech_prob;
+        if (short_alnum && high_no_speech) {
+            std::cerr << "🔇 Dropping borderline noise transcript "
+                         "(alnum=" << alnum << " < "
+                      << cfg_.post_whisper_strict_min_alnum
+                      << ", no_speech="
+                      << whisper_.last_no_speech_prob()
+                      << " >= "
+                      << cfg_.post_whisper_strict_no_speech_prob
+                      << "): '" << transcript << "'" << std::endl;
+            transcript.clear();
+        }
+    }
+
     if (telemetry_) {
         telemetry_->emit_whisper(whisper_.last_latency_ms(),
                                  whisper_.last_no_speech_prob(),
@@ -321,31 +373,29 @@ void VoiceListener::process_utterance_(
         } else {
             Utterance utterance{decision.transcript, utt.pcm};
 
-            // Latency-masking thinking earcon: scheduled at +800 ms so
-            // a fast local-intent / cached-answer route never plays it,
-            // but a slow LLM round-trip (Gemini Flash-Lite tail
-            // latency, retries) gets a soft "still working" pulse.
-            // Cancelled the moment `route()` returns.
-            std::mutex tm_mu;
-            std::condition_variable tm_cv;
-            bool tm_done = false;
-            std::thread thinking_timer([&] {
-                std::unique_lock<std::mutex> lk(tm_mu);
-                if (!tm_cv.wait_for(lk, std::chrono::milliseconds(800),
-                                    [&] { return tm_done; })) {
-                    earcons_.start_thinking();
-                }
-            });
+            // Latency-masking thinking earcon: scheduled at +N ms
+            // (see `cfg_.thinking_earcon_delay_ms`) so a fast
+            // local-intent / cached-answer route never plays it, but a
+            // slow LLM round-trip (Gemini Flash-Lite tail latency,
+            // retries) gets a soft "still working" pulse.  The
+            // scheduler is shared across utterances so we don't pay
+            // for thread creation on every turn.
+            const int thinking_delay_ms = cfg_.thinking_earcon_delay_ms;
+            if (thinking_delay_ms > 0) {
+                thinking_scheduler_->arm(
+                    std::chrono::milliseconds(thinking_delay_ms),
+                    [this] { earcons_.start_thinking(); });
+            }
 
             const auto routed = router.route(utterance);
 
-            {
-                std::lock_guard<std::mutex> lk(tm_mu);
-                tm_done = true;
+            if (thinking_delay_ms > 0) {
+                thinking_scheduler_->cancel();
+                // stop_thinking is idempotent — calling it whether or
+                // not the start_thinking actually fired keeps the
+                // earcon module's "currently looping" state correct.
+                earcons_.stop_thinking();
             }
-            tm_cv.notify_all();
-            thinking_timer.join();
-            earcons_.stop_thinking();
 
             handle_routed_(routed.action);
             maybe_announce_drill_(routed.action.kind);

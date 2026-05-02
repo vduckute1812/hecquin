@@ -1,9 +1,16 @@
 #pragma once
 
+#include <functional>
 #include <optional>
 #include <string>
 
 namespace hecquin::music {
+
+/** Optional hooks for `MusicProvider::play` (all callbacks optional). */
+struct MusicPlayCallbacks {
+    /** Invoked on the playback thread after the first PCM chunk is decoded. */
+    std::function<void()> on_first_audio_frame;
+};
 
 /**
  * A single resolved track: what to announce and the URL a provider can
@@ -30,7 +37,9 @@ struct MusicTrack {
  *   - `play()` is blocking — it should not return until playback has
  *     drained or been aborted.  `MusicSession` runs it on a background
  *     thread so the listener can keep capturing voice while audio
- *     streams.
+ *     streams.  An optional `on_first_audio_frame` callback fires after
+ *     the first decoded samples are pushed to the device so the session
+ *     can defer user-visible "Now playing" until audio is actually live.
  *   - `stop()` may be invoked concurrently from another thread to break
  *     `play()` early (e.g. on SIGINT or a "stop music" intent).
  *     Idempotent.
@@ -44,7 +53,8 @@ public:
     virtual ~MusicProvider() = default;
 
     virtual std::optional<MusicTrack> search(const std::string& query) = 0;
-    virtual bool play(const MusicTrack& track) = 0;
+    virtual bool play(const MusicTrack& track,
+                      const MusicPlayCallbacks& callbacks = {}) = 0;
     virtual void stop() = 0;
     /** Best-effort: suspend the audio device without tearing down the
      *  decoder pipeline.  Default no-op. */

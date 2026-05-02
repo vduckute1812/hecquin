@@ -1,7 +1,9 @@
 #include "voice/AudioCapture.hpp"
 
+#include <chrono>
 #include <cmath>
 #include <iostream>
+#include <thread>
 
 void SDLCALL AudioCapture::sdlCallback(void* userdata, Uint8* stream, int len) {
     auto* self = static_cast<AudioCapture*>(userdata);
@@ -26,9 +28,10 @@ bool AudioCapture::open(std::atomic<bool>& keep_capturing, const AudioCaptureCon
     }
 
     const int num_devices = SDL_GetNumAudioDevices(SDL_TRUE);
-    std::cout << "Found " << num_devices << " recording device(s):" << std::endl;
+    std::cout << "[voice] Found " << num_devices << " recording device(s):" << std::endl;
     for (int i = 0; i < num_devices; ++i) {
-        std::cout << "  [" << i << "] " << SDL_GetAudioDeviceName(i, SDL_TRUE) << std::endl;
+        std::cout << "[voice]   [" << i << "] " << SDL_GetAudioDeviceName(i, SDL_TRUE)
+                  << std::endl;
     }
 
     SDL_AudioSpec want;
@@ -43,10 +46,15 @@ bool AudioCapture::open(std::atomic<bool>& keep_capturing, const AudioCaptureCon
     const char* device_name = nullptr;
     if (cfg_.device_index >= 0 && cfg_.device_index < num_devices) {
         device_name = SDL_GetAudioDeviceName(cfg_.device_index, SDL_TRUE);
-        std::cout << "→ Selected device [" << cfg_.device_index << "] " << device_name << std::endl;
+        std::cout << "[voice] Selected device [" << cfg_.device_index << "] " << device_name
+                  << std::endl;
     } else if (cfg_.device_index >= 0) {
-        std::cerr << "AUDIO_DEVICE_INDEX=" << cfg_.device_index
-                  << " out of range (0.." << num_devices - 1 << "), using default." << std::endl;
+        std::cerr << "[voice] AUDIO_DEVICE_INDEX=" << cfg_.device_index
+                  << " out of range (0.." << num_devices - 1 << "), using default."
+                  << std::endl;
+    } else if (cfg_.device_index == -1) {
+        std::cout << "[voice] AUDIO_DEVICE_INDEX=-1 (system default capture device)"
+                  << std::endl;
     }
 
     SDL_AudioSpec have;
@@ -56,8 +64,9 @@ bool AudioCapture::open(std::atomic<bool>& keep_capturing, const AudioCaptureCon
         return false;
     }
 
-    std::cout << "Audio device: " << have.freq << "Hz, " << static_cast<int>(have.channels) << " channels, format="
-              << have.format << std::endl;
+    std::cout << "[voice] Opened capture: " << have.freq << " Hz, "
+              << static_cast<int>(have.channels) << " ch, format=" << have.format
+              << std::endl;
     return true;
 }
 
@@ -105,6 +114,27 @@ std::size_t AudioCapture::snapshotRecent(std::size_t max_samples,
 std::size_t AudioCapture::bufferSize() const {
     std::lock_guard<std::mutex> lock(buffer_mutex_);
     return buffer_.size();
+}
+
+std::size_t AudioCapture::probeSignal(int duration_ms) {
+    if (device_id_ == 0) return 0;
+
+    // Drop any state left over from a previous call so the count we
+    // return reflects only this probe window.
+    clearBuffer();
+
+    const bool was_paused = (SDL_GetAudioDeviceStatus(device_id_) != SDL_AUDIO_PLAYING);
+    if (was_paused) SDL_PauseAudioDevice(device_id_, 0);
+
+    std::this_thread::sleep_for(std::chrono::milliseconds(std::max(0, duration_ms)));
+
+    const std::size_t got = bufferSize();
+
+    // Restore the previous paused state so the rest of the bootstrap
+    // sees the device exactly as the caller left it.
+    if (was_paused) SDL_PauseAudioDevice(device_id_, 1);
+    clearBuffer();
+    return got;
 }
 
 void AudioCapture::limitBufferSize(int max_seconds, int keep_seconds) {

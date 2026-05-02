@@ -7,7 +7,7 @@
 
 namespace hecquin::learning::pronunciation::drill {
 
-DrillSentencePicker::DrillSentencePicker(LearningStore* store, Config cfg)
+DrillSentencePicker::DrillSentencePicker(LearningStoreRef store, Config cfg)
     : store_(store), cfg_(cfg) {}
 
 void DrillSentencePicker::load(std::vector<std::string> pool, G2P* g2p) {
@@ -59,7 +59,7 @@ std::size_t DrillSentencePicker::choose_weak_biased_index_() {
         return next_idx_++ % pool_.size();
     }
 
-    const auto weak = store_->weakest_phonemes(cfg_.weakest_phonemes_n);
+    const auto weak = store_->get().weakest_phonemes(cfg_.weakest_phonemes_n);
     std::vector<std::size_t> candidates;
     candidates.reserve(16);
     for (const auto& ipa : weak) {
