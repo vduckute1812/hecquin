@@ -18,6 +18,7 @@ CMake internals, and the full Source Layout tree — see
 | [`common/`](./common/README.md) | Tiny header-only utilities (string, UTF-8) |
 | [`config/`](./config/README.md) | Runtime configuration: `ConfigStore`, `AppConfig`, `AiClientConfig` |
 | [`learning/`](./learning/README.md) | English tutor + pronunciation drill subsystem — embeddings, ingest, RAG, SQLite store, pronunciation & prosody |
+| [`music/`](./music/README.md) | Music provider abstraction + YouTube (`yt-dlp` / `ffmpeg`) streaming; async `MusicSession` |
 | [`observability/`](./observability/README.md) | Structured logger (pretty / JSON) |
 | [`tts/`](./tts/README.md) | Piper TTS facade + Strategy-based synthesis backends + SDL playback |
 | [`voice/`](./voice/README.md) | Microphone capture, VAD, Whisper wrapper, and the listener orchestrator (Chain of Responsibility router) |
@@ -63,6 +64,7 @@ flowchart TD
     actions["actions/ (Action + ActionKind builders)"]
     tts["tts/ (PiperSpeech + IPiperBackend + playback)"]
     learning["learning/ (Ingestor + Tutor + Drill + Store)"]
+    music["music/ (MusicProvider + MusicSession)"]
     config["config/ (ConfigStore, AppConfig, AiClientConfig)"]
     obs["observability/ (Logger)"]
     common["common/ (string + utf8 helpers)"]
@@ -71,7 +73,9 @@ flowchart TD
     voice --> tts
     voice --> ai
     voice --> actions
+    voice --> music
     voice --> config
+    music --> config
     ai --> actions
     ai --> config
     ai --> obs
@@ -81,6 +85,7 @@ flowchart TD
     learning --> config
     learning --> actions
     learning --> obs
+    music --> common
     ai --> common
     learning --> common
 ```

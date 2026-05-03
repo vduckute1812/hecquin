@@ -97,7 +97,7 @@ sequenceDiagram
     participant R as RetrievalService
     participant E as EmbeddingClient
     participant S as LearningStore
-    participant H as ChatHttpClient
+    participant H as IHttpClient
     participant P as ProgressTracker
 
     L->>T: process(transcript)

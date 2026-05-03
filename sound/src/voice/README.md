@@ -17,10 +17,10 @@ single-purpose collaborators under this same folder.
 | `ListenerMode.hpp` | Tiny header that owns the `ListenerMode { Assistant, Lesson, Drill, Music, Asleep }` enum. Lives on its own so `ActionSideEffectRegistry` and `VoiceListener` can both include it without circular deps. `Asleep` is entered on `Sleep` intent and left only via the wake gate (`Wake` intent / wake phrase / PTT press). |
 | `VoiceListener.hpp/cpp` | Coordinator: poll loop + `ListenerMode` state machine + `PipelineEventSink` wiring + UX cue wiring (`Earcons`, `WakeWordGate`, `ModeIndicator`). Delegates to the collaborators below. `apply_local_intent_side_effects_` is now a 10-line dispatch over `ActionSideEffectRegistry::descriptor_for`; honours `aborts_tts` (universal stop), `ExitHome` mode-change (Wake), and forwards `IdentifyUser` to `user_identified_cb_`. |
 | `ActionSideEffectRegistry.hpp/cpp` | Static `ActionKind → {ModeChange, ListenerMode target, music_hook, sets_pending_drill, aborts_tts}` table. Adding a new music / lesson / wake intent is a one-row extension instead of an N-case `switch`. New rows for `Sleep`, `Wake`, `AbortReply`, `MusicVolumeUp/Down`, `MusicSkip`. |
-| `MusicWiring.hpp/cpp` | `install_music_wiring(VoiceListener&, MusicConfig) → MusicWiring` builds a `MusicProvider` via `MusicFactory`, wraps it in a `MusicSession`, and registers all six mid-song callbacks (handle / abort / pause / resume / volume / skip). Replaces the 15-line copy that used to live verbatim in every voice main. |
+| `MusicWiring.hpp/cpp` | `install_music_wiring(VoiceListener&, MusicConfig) → MusicWiring` builds a `MusicProvider` via `MusicFactory`, wraps it in a `MusicSession`, registers `setMusicCallback` + abort / pause / resume / volume-step / skip, and connects `AudioBargeInController::set_music_gain_setter` to `MusicProvider::set_gain_target`. |
 | `UtteranceCollector.hpp/cpp` | Owns the 50 ms loop, primary VAD counters, collection timers, and the adaptive noise-floor wiring (calibration + hysteresis). `collect_next()` is now a thin loop over `poll_tick_(...)` which packages each tick's work — VAD probe, floor update, debug log, advance — into a `TickResult { Continue, EmitUtterance }`. Snapshots the buffer only when the result is `EmitUtterance`. |
 | `MusicSideEffects.hpp/cpp` | Façade that owns abort / pause / resume / volume / skip callbacks plus a non-owning `UtteranceCollector*` + `AudioBargeInController*` and routes every music intent (`MusicPlayback` / `MusicNotFound` / `MusicCancel` / `MusicPause` / `MusicResume` / `MusicVolumeUp/Down` / `MusicSkip`) without leaking music plumbing into the listener's main switch. The repeating `(if collector_) ... (if barge_) ...` shape collapses into a private `mark_external_audio_(bool)` helper. Two extras: `on_tts_speak_begin/end` hooks (TTS-ducks-music gain ramp via `barge_->tts_speak_*`) and an opt-in confirm-cancel state machine (`HECQUIN_CONFIRM_CANCEL=1`) that arms a duck + window on the first `MusicCancel` and only aborts on the second within the window. |
-| `Earcons.hpp/cpp` | Tone bank + `+800 ms` thinking-pulse scheduler. Cues: `StartListening`, `VadRejected`, `Thinking`, `NetworkOffline`, `Acknowledge`, `Sleep`, `Wake`. Synthesised in-process (no `.wav` ships); optional WAV overrides via `set_search_dir(HECQUIN_EARCONS_DIR)`. `play_async` for non-blocking dispatch; `start_thinking / stop_thinking` for the LLM-tail latency mask. Disabled by `HECQUIN_EARCONS=0`. |
+| `Earcons.hpp/cpp` | Tone bank for UX cues: `StartListening`, `VadRejected`, `Thinking`, `NetworkOffline`, `Acknowledge`, `Sleep`, `Wake`. Synthesised in-process (no `.wav` ships); optional WAV overrides via `set_search_dir(HECQUIN_EARCONS_DIR)`. `play_async` for non-blocking dispatch; `start_thinking / stop_thinking` pair with `ThinkingScheduler` so the thinking pulse fires ~800 ms after routing begins unless the reply arrives sooner. Disabled by `HECQUIN_EARCONS=0`. |
 | `WakeWordGate.hpp/cpp` | Three-mode routing decision applied **after** Whisper but **before** the router. `always` (default — legacy behaviour), `wake_word` (transcripts must start with — or arrive within `HECQUIN_WAKE_WINDOW_MS` of — `HECQUIN_WAKE_PHRASE`; the phrase is stripped before dispatch), `ptt` (push-to-talk — only routes while a hardware GPIO pin / scripted `set_ptt_pressed` is held). The gate is also consulted while `mode_ == Asleep` so the wake intent / phrase / PTT press is the only way out. |
 | `ModeIndicator.hpp/cpp` | Fired on every `mode_` change. Default impl plays a mode-tinted `Earcons::StartListening` variant; downstream GPIO / LED implementations subclass and override `notify(ListenerMode)`. `VoiceListener::set_mode_indicator(...)` swaps the implementation behind the same call site. |
 | `AudioBargeInController.hpp/cpp` | Owns the music-gain ramp and the in-flight TTS abort fuse. `tts_speak_begin / end(gain, ramp_ms)` ramps music gain down while Piper speaks; `abort_tts_now()` is fired by the listener on `AbortReply` (ActionSideEffectRegistry's `aborts_tts=true`). |
@@ -29,7 +29,10 @@ single-purpose collaborators under this same folder.
 | `TtsResponsePlayer.hpp/cpp` | TTS sanitisation regex set + Piper playback call. The two distinct lifecycles — `MuteGuard`-wrapped legacy path vs live-mic barge-in path — live in `speak_with_muted_mic_` / `speak_with_barge_in_`; `speak()` is a thin Strategy dispatcher (sanitise + label-print, then route on `barge_in_live_mic`). |
 | `UtteranceRouter.hpp/cpp` | Chain of Responsibility: local intents → drill callback → tutor callback → `CommandProcessor::process` fallback. |
 | `PipelineTelemetry.hpp/cpp` | Owns the optional `PipelineEventSink` and the JSON-attribute formatting for every per-stage event the listener emits (`vad_gate`, `whisper`). Centralises the schema. |
-| `VoiceApp.hpp/cpp` | Shared bootstrap for voice executables (`config` → `AudioCapture` → `WhisperEngine` → `VoiceListener`). |
+| `VoiceApp.hpp/cpp` | Shared bootstrap for voice executables (`config` → `AudioCapture` → `WhisperEngine`). Optionally warns when the chosen capture device is silent at boot (`probeSignal`). |
+| `CapabilityReport.hpp/cpp` | Boot-time `probe_capabilities(AppConfig) → CapabilityStatus` plus `spoken_summary()` for what is missing (cloud API, ONNX pronunciation model, `yt-dlp`). Used by `VoiceApp::speak_capability_summary()` unless `HECQUIN_QUIET_BOOT=1`. |
+| `ThinkingScheduler.hpp/cpp` | Single background worker that arms a delayed callback (`arm(delay, on_fire)`) with cancel/replace semantics. Replaces ad-hoc threads for the **thinking** earcon tail latency — invoked from `VoiceListener` around cloud routing. |
+| `PrewarmService.hpp/cpp` | Detached-thread Piper / Whisper warm-up (`warm_piper`, `warm_whisper`, `HECQUIN_PREWARM`). Built into the library but **not yet called** from `VoiceApp` / learning mains — reserved for future boot integration. |
 | `VoiceDetector.cpp` | Entry point for the `voice_detector` binary. |
 
 `VoiceListenerConfig` and `WhisperConfig` read their `HECQUIN_*` env-var
@@ -61,6 +64,9 @@ Full pseudocode + the `VoiceListenerConfig` table is in
 - `tests/voice/test_music_side_effects.cpp` — listener-side music callback dispatch + confirm-cancel state machine + TTS-ducks-music hooks. No SDL / Whisper.
 - `tests/voice/test_whisper_post_filter.cpp` — annotation strip, min-alnum, no-speech probability gate. No GGML.
 - `tests/voice/test_utterance_router.cpp` — Chain of Responsibility ordering, including `WakeWordGate` skip + abort-TTS side effect.
+- `tests/voice/test_wake_word_gate.cpp` — wake / PTT / follow-on window behaviour.
+- `tests/voice/test_thinking_scheduler.cpp` — arm / cancel / replace / synchronous `delay <= 0` path.
+- `tests/voice/test_audio_barge_in_controller.cpp` — TTS threshold boost + music duck ramp helpers exercised without SDL capture.
 
 UX-layer cues / gates and their interaction with the listener are
 described as a single narrative in
@@ -130,8 +136,11 @@ hysteresis gap clears the room's noise peaks.
 
 - Mic echo is suppressed by the `MuteGuard` RAII wrapper, not by
   scattered `pauseDevice()` / `resumeDevice()` calls. Use the guard.
-- Whisper noise / hallucination filters live inside `WhisperEngine`, not
-  in callers — `transcribe()` returns an empty string when any gate trips.
+- Whisper inference lives in `WhisperEngine::transcribe`; segment join and
+  worst no-speech tracking feed `WhisperPostFilter`, which enforces
+  `min_alnum_chars`, the no-speech probability gate, and annotation
+  stripping — `transcribe()` returns an empty string when the filter rejects
+  the decode.
 
 ## UML
 
@@ -326,7 +335,7 @@ stateDiagram-v2
 The wake gate (`WakeWordGate`) is consulted on every transcript while
 `mode_ == Asleep` so only a `Wake` intent, the configured wake phrase,
 or a PTT press exits sleep. See
-[`../../UX_FLOW.md#sleepwake-cycle`](../../UX_FLOW.md) for the
+[`../../ux-flow/DIAGRAMS.md#54-sleep--wake-cycle`](../../ux-flow/DIAGRAMS.md) for the
 narrative + sequence diagram.
 
 ### State diagram — `UtteranceCollector`

@@ -18,7 +18,7 @@ namespace gave us:
 | `VectorSearchOps.hpp` | `query_top_k(has_vec0, embedding, k)` — vec0 MATCH when the extension is loaded, brute-force cosine over the BLOB column when it isn't. |
 | `SessionsOps.hpp` | `begin_session`, `end_session`, `record_interaction`, `touch_vocab` (uses `Vocabulary::normalise`). |
 | `PronunciationOps.hpp` | `record_pronunciation_attempt`, `touch_phoneme_mastery`, `weakest_phonemes(n, min_attempts)`. |
-| `ApiCallsOps.hpp` | `record_api_call`, `record_pipeline_event`. Written by `LoggingHttpClient` and the pipeline-event sinks. |
+| `ApiCallsOps.hpp` | `record_api_call`, `record_pipeline_event`. Populated when learning binaries wrap HTTP with `LoggingHttpClient` / install a `PipelineEventSink` — not from bare `CurlHttpClient` paths such as `voice_detector` chat. |
 
 All five are guarded by `#ifdef HECQUIN_WITH_SQLITE` — when SQLite is
 absent the facade short-circuits before calling the forwarder.

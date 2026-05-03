@@ -15,7 +15,9 @@ rest of the codebase would otherwise reach for `std::cerr`.
 - **json** — `{"ts":…,"level":…,"tag":…,"msg":…}` per line (CI / ingest pipelines).
 
 Telemetry (`api_calls`, `pipeline_events`) does **not** flow through this
-logger — those go straight into SQLite via `LearningStore` sinks. See
+logger — those go straight into SQLite via `LearningStore` sinks when the
+`LoggingHttpClient` / `PipelineEventSink` wiring is installed (see
+[`../../README.md`](../../README.md) → Logging & telemetry). See
 [`../../ARCHITECTURE.md#observability`](../../ARCHITECTURE.md#observability).
 
 ## Notes

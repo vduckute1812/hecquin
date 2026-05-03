@@ -26,11 +26,12 @@ struct MusicWiring {
 
 /**
  * Build a music provider from `cfg`, wrap it in a `MusicSession`, and
- * register all four mid-song callbacks (handle / abort / pause /
- * resume) on the listener.  Returns the owning bundle.
+ * register the music-query callback plus mid-playback controls (abort /
+ * pause / resume / volume step / skip) on the listener. Also wires the
+ * barge-in controller's gain setter to `MusicProvider::set_gain_target`.
+ * Returns the owning bundle.
  *
- * Replaces the 15-line copy that was duplicated across the four
- * voice-listening mains.
+ * Replaces the copy that was duplicated across voice-listening mains.
  */
 MusicWiring install_music_wiring(VoiceListener& listener,
                                  const MusicConfig& cfg);

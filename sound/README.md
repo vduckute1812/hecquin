@@ -3,13 +3,15 @@
 A cross-platform audio processing module for the Robot Tutor project, providing speech recognition (voice-to-text) and speech synthesis (text-to-speech) capabilities.
 
 > This README is the **user guide** — setup, commands, configuration keys, and troubleshooting.
+> For a short **map of core classes** (`VoiceListener`, `VoiceApp`, `CommandProcessor`,
+> `UtteranceRouter`) and what their main functions do, see [`CLASS_OVERVIEW.md`](./CLASS_OVERVIEW.md).
 > For the internal **source layout, component details, data-flow diagrams, SQLite schema,
 > threading model, and CMake internals**, see [`ARCHITECTURE.md`](./ARCHITECTURE.md).
 > For end-to-end **call-flow sequence diagrams** (boot, voice turn, TTS barge-in, music
-> streaming + mid-song commands), see [`SEQUENCE_DIAGRAMS.md`](./SEQUENCE_DIAGRAMS.md).
+> streaming + mid-song commands), see [`ux-flow/SEQUENCE_DIAGRAMS.md`](./ux-flow/SEQUENCE_DIAGRAMS.md).
 > For the **voice-first UX layer** (earcons, wake-word / push-to-talk, sleep / wake intents,
-> mode indicator, music confirm-cancel, per-user namespacing, welcome-back recap),
-> see [`UX_FLOW.md`](./UX_FLOW.md).
+> mode indicator, music confirm-cancel, per-user namespacing, welcome-back recap), see
+> [`UX_FLOW.md`](./UX_FLOW.md) and the split detail under [`ux-flow/`](./ux-flow/).
 
 ## Overview
 
@@ -224,7 +226,7 @@ The voice detector listens on the default microphone, detects speech activity, t
 | `HECQUIN_LOG_FORMAT`                       | `pretty` (default) or `json` (one JSON object per log line) |
 
 **Voice-first UX environment variables** (all optional; defaults preserve the legacy
-behaviour — for the full design, diagrams, and rationale see [`UX_FLOW.md`](./UX_FLOW.md)):
+behaviour — overview in [`UX_FLOW.md`](./UX_FLOW.md), diagrams in [`ux-flow/DIAGRAMS.md`](./ux-flow/DIAGRAMS.md)):
 
 | Variable                          | Default  | Purpose                                                                                  |
 | --------------------------------- | -------- | ---------------------------------------------------------------------------------------- |
@@ -260,7 +262,7 @@ Prerequisites on the deploy target (mac dev, Raspberry Pi prod):
 | `HECQUIN_FFMPEG_BIN`           | Override the `ffmpeg` binary (default: look up on `$PATH`).          |
 | `HECQUIN_MUSIC_SAMPLE_RATE`    | PCM rate for SDL playback (default `44100`).                         |
 
-Limitations (v1): `play()` is synchronous — the microphone stays muted for the full duration of the song, so "stop music" mid-playback is not yet supported over voice. Ctrl+C on the CLI, or the built-in signal handler, will still abort the `yt-dlp | ffmpeg` subprocess cleanly.
+Playback is **asynchronous** after a hit: `MusicSession` runs the provider’s `play()` on a worker thread, the capture device **stays live**, and mid-song voice commands (`stop music`, pause, volume, …) are handled by the same `LocalIntentMatcher` fast path. Song bleed into the mic is mitigated by `UtteranceCollector::set_external_audio_active` for the stream lifetime (see [`src/music/README.md`](./src/music/README.md)). Known gap: if the `yt-dlp | ffmpeg` pipeline fails *after* the "Now playing …" TTS has already been spoken, the user is not told again (see that README). Ctrl+C or the signal handler still aborts the subprocess.
 
 
 Use any provider that exposes the same JSON shape as OpenAI `/v1/chat/completions` (adjust base URL accordingly). The client does not call the native Gemini JSON API; it works with Google’s **OpenAI-compatible** Gemini host (see below).
@@ -510,18 +512,25 @@ The module logs through a small in-process logger at
 
 ### API call telemetry
 
-Every outbound chat/embedding call is logged automatically: the
-`RetryingHttpClient` → `LoggingHttpClient` → `CurlHttpClient` decorator chain
-wraps every HTTP call and writes one row per request into the `api_calls`
-SQLite table (latency, status, request/response bytes, error — with retries
-collapsed to the terminal outcome). No extra flag is required — when libcurl
-is available, telemetry is on.
+Rows in the `api_calls` SQLite table are produced only when outbound HTTP
+goes through the `LoggingHttpClient` decorator. Today that is wired for
+**`english_ingest`** and **`english_tutor`** (see
+[`src/learning/cli/EnglishTutorMain.cpp`](./src/learning/cli/EnglishTutorMain.cpp)
+and [`src/learning/cli/EnglishIngest.cpp`](./src/learning/cli/EnglishIngest.cpp)):
+`RetryingHttpClient` → `LoggingHttpClient` → `CurlHttpClient`, with a
+`StoreApiSink` when the learning database opens successfully. The
+**`voice_detector`** binary uses a plain `CurlHttpClient` inside
+`CommandProcessor` for chat completions, so those calls are **not**
+mirrored into `api_calls` (libcurl is still required for cloud replies).
 
 ### Pipeline events (v3 schema)
 
 Stage-level latencies and outcomes (`vad_gate`, `whisper`, `piper_synth`,
 `drill_align`, `drill_pick`, …) are written to the `pipeline_events` table
-via the same sink mechanism. The sibling **`dashboard/`** module consumes
+when `VoiceListener::setPipelineEventSink` is connected to the learning
+store — done by default in **`english_tutor`** / **`pronunciation_drill`**
+via `LearningApp::wire_pipeline_sink`. **`voice_detector`** leaves the
+sink unset unless you add wiring. The sibling **`dashboard/`** module consumes
 both tables (plus its own `request_logs`) to render daily traffic, latency,
 gate-failure, and error-rate charts over HTTPS; see
 [`../dashboard/README.md`](../dashboard/README.md) for setup, and

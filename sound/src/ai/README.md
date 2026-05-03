@@ -7,10 +7,15 @@ robot can answer offline.
 
 ## Transport (decorator chain)
 
+The **full** stack below is wired manually in `learning/cli` when SQLite
+`api_calls` telemetry is desired. **`voice_detector`** does **not** use it:
+its default `CommandProcessor` ctor owns a bare `CurlHttpClient`, so chat
+completions are not logged to the learning DB.
+
 ```
-RetryingHttpClient
-   └── LoggingHttpClient        (writes every call into `api_calls`)
-        └── CurlHttpClient      (libcurl POST)
+RetryingHttpClient           (learning binaries — retries transient failures)
+   └── LoggingHttpClient      (writes each attempt into `api_calls` when a sink is set)
+        └── CurlHttpClient    (libcurl POST)
 ```
 
 | File | Purpose |
@@ -26,7 +31,7 @@ RetryingHttpClient
 |---|---|
 | `LocalIntentMatcher.hpp/cpp` | Case-insensitive regex matcher. Patterns come from `AppConfig::learning` (lesson/drill phrases) plus built-ins for device / story / music / UX intents. Returns a typed `std::optional<ActionMatch>` so the caller never has to re-run the regex to decide which toggle fired. Built-in patterns now cover: `device` (turn on/off), `story`, `music` (open/cancel/pause/resume/volume up/down/skip), `lesson_start/end`, `drill_start/end/advance`, `abort` (universal stop), `help`, `sleep` / `wake`, and `identify_user` (with name capture group). |
 | `ChatClient.hpp/cpp` | OpenAI-compatible chat-completions client. Takes an `IHttpClient&` so tests can inject a canned response. |
-| `CommandProcessor.hpp/cpp` | `match_local` then `ChatClient::ask` (blocking). Optional `process_async`; live path uses sync `process` through `UtteranceRouter`. |
+| `CommandProcessor.hpp/cpp` | `match_local` then `ChatClient::ask` (blocking). Optional `process_async`; live path uses sync `process` through `UtteranceRouter`. Default ctor: owns `CurlHttpClient` and passes it to `ChatClient`. Override ctor: inject any `IHttpClient&` (used by `english_tutor` to pass the retry+logging stack). |
 | `OpenAiChatContent.hpp/cpp` | `nlohmann::json` extractor that pulls `choices[0].message.content` out of responses regardless of which OpenAI-compat host produced them. |
 | `HttpReplyBuckets.hpp/cpp` | Shared `short_reply_for_status(int)` → spoken-safe one-liner (`"I'm temporarily offline"`, `"temporarily unavailable"`, …). Used by both `ChatClient::ask` error paths and `EnglishTutorProcessor::call_llm_` to keep error replies consistent. |
 
@@ -58,14 +63,16 @@ for the full routing diagram.
 
 ### Class diagram — `IHttpClient` Decorator chain + `CommandProcessor`
 
-The intended decorator stack documented in
-[`RetryingHttpClient.hpp`](./RetryingHttpClient.hpp) is
-`RetryingHttpClient(LoggingHttpClient(CurlHttpClient))`; this stack is
-wired manually in
-[`learning/cli/EnglishTutorMain.cpp`](../learning/cli/EnglishTutorMain.cpp).
-`CommandProcessor` itself uses a bare `CurlHttpClient` by default. Each
-`*Action` builder lives in [`../actions/`](../actions/README.md) and
-emits an `Action` struct.
+The learning binaries construct
+`RetryingHttpClient(LoggingHttpClient(CurlHttpClient))` with a
+`StoreApiSink` when the DB opens — see
+[`learning/cli/EnglishTutorMain.cpp`](../learning/cli/EnglishTutorMain.cpp)
+(embed + chat each get their own `LoggingHttpClient` sharing the raw curl
+adapter). **`voice_detector`**
+([`voice/VoiceDetector.cpp`](../voice/VoiceDetector.cpp)) passes only
+`AiClientConfig` into `CommandProcessor`, so the HTTP dependency is the
+innermost `CurlHttpClient` only. Each `*Action` builder lives in
+[`../actions/`](../actions/README.md) and emits an `Action` struct.
 
 ```mermaid
 classDiagram
@@ -111,16 +118,16 @@ classDiagram
     ChatClient ..> IHttpClient : posts JSON
     CommandProcessor o-- LocalIntentMatcher
     CommandProcessor o-- ChatClient
-    CommandProcessor ..> IHttpClient : Curl by default
+    CommandProcessor ..> IHttpClient : CurlHttpClient default injected ChatClient
 ```
 
 ### Sequence diagram — `CommandProcessor::process`
 
 Local intents short-circuit the chat call. When the matcher returns
-`nullopt`, `ChatClient` issues an HTTP POST through the wired
-`IHttpClient` chain. In `EnglishTutorMain.cpp` that chain is
-`RetryingHttpClient -> LoggingHttpClient -> CurlHttpClient`; in the
-default `CommandProcessor` constructor it is just `CurlHttpClient`.
+`nullopt`, `ChatClient` issues an HTTP POST through whatever `IHttpClient`
+was injected. The diagram shows the **learning** wiring; **`voice_detector`**
+skips `RetryingHttpClient` / `LoggingHttpClient` and calls `CurlHttpClient`
+directly.
 
 ```mermaid
 sequenceDiagram
@@ -146,7 +153,7 @@ sequenceDiagram
             Retry->>Log: post_json (per attempt)
             Log->>Curl: post_json (libcurl)
             Curl-->>Log: HttpResult
-            Log-->>Retry: HttpResult (logged)
+            Log-->>Retry: HttpResult (logged when sink set)
         end
         Retry-->>Chat: HttpResult
         Chat-->>Cmd: ExternalApiAction (or error reply)

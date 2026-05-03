@@ -10,7 +10,7 @@ the OpenAI-compatible HTTP client settings.
 | File | Purpose |
 |---|---|
 | `ConfigStore.hpp/cpp` | dotenv parser (`KEY=value`, quoted values, comments) + env-var lookup. Process-wide singleton-style access via static helpers. |
-| `AppConfig.hpp/cpp` | Top-level config container. Groups `ai`, `audio`, `learning`, `pronunciation`, and `locale` sub-configs; populated once from `ConfigStore` at startup. |
+| `AppConfig.hpp/cpp` | Top-level config container. Groups `ai`, `audio`, `learning`, `pronunciation`, `locale`, and `music` sub-configs; populated once from `ConfigStore` at startup. |
 
 ## Environment variables
 

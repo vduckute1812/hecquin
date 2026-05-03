@@ -1,28 +1,31 @@
-# `sound/` Sequence Diagrams
+# End-to-end sequence diagrams
 
-End-to-end Mermaid sequence diagrams for the `sound/` module.  This file
-**only documents flows that are not already drawn elsewhere** — every
-existing per-module diagram is linked from the index below instead of
-re-rendered.
+Lives in **`sound/ux-flow/`** next to the [UX flow overview](../UX_FLOW.md) and
+[`DIAGRAMS.md`](./DIAGRAMS.md) (mode machines, earcon timelines, sleep/wake, music UX).
+This file holds **cross-module** Mermaid sequences: boot, a full voice turn, TTS
+barge-in, and music streaming with mid-song control.
+
+It **only documents flows that are not already drawn elsewhere** — every
+per-module diagram is linked from the index below instead of re-rendered.
 
 ## Existing diagrams (single source of truth)
 
 | Flow                                       | Location                                                                                          |
 |--------------------------------------------|---------------------------------------------------------------------------------------------------|
-| `VoiceListener::run` main loop             | [`src/voice/README.md`](./src/voice/README.md#sequence-diagram--voicelistenerrun-loop)            |
-| `piper_speak_and_play_streaming` (legacy)  | [`src/tts/README.md`](./src/tts/README.md#sequence-diagram--piper_speak_and_play_streaming)       |
-| `CommandProcessor::process` (chat fallback)| [`src/ai/README.md`](./src/ai/README.md#sequence-diagram--commandprocessorprocess)                |
-| `EnglishTutorProcessor::process` (RAG)     | [`src/learning/README.md`](./src/learning/README.md#sequence-diagram--englishtutorprocessorprocess) |
-| `PronunciationDrillProcessor::score`       | [`src/learning/pronunciation/drill/README.md`](./src/learning/pronunciation/drill/README.md#sequence-diagram--pronunciationdrillprocessorscore) |
-| `ListenerMode` state transitions (incl. `Asleep`) | [`UX_FLOW.md` §5.1](./UX_FLOW.md#51-mode-state-machine-with-asleep)                          |
-| Per-utterance UX cue timeline (success / abort)   | [`UX_FLOW.md` §5.2 / §5.3](./UX_FLOW.md#52-per-utterance-ux-cue-timeline-success-path)       |
-| Sleep / Wake cycle                         | [`UX_FLOW.md` §5.4](./UX_FLOW.md#54-sleep--wake-cycle)                                            |
-| Music confirm-cancel state machine         | [`UX_FLOW.md` §5.5](./UX_FLOW.md#55-music-confirm-cancel-state-machine)                           |
-| TTS-ducks-music gain timeline              | [`UX_FLOW.md` §5.6](./UX_FLOW.md#56-tts-ducks-music-gain-timeline)                                |
-| Drill ready-gate (auto-advance off)        | [`UX_FLOW.md` §5.7](./UX_FLOW.md#57-drill-ready-gate-auto-advance-off)                            |
-| User identification + welcome-back recap   | [`UX_FLOW.md` §5.8](./UX_FLOW.md#58-user-identification--welcome-back-recap)                      |
-| `UtteranceCollector` collect FSM           | [`src/voice/README.md`](./src/voice/README.md#state-diagram--utterancecollector)                  |
-| `StreamingSdlPlayer` playback FSM          | [`src/tts/README.md`](./src/tts/README.md#state-diagram--streamingsdlplayer)                      |
+| `VoiceListener::run` main loop             | [`src/voice/README.md`](../src/voice/README.md#sequence-diagram--voicelistenerrun-loop)            |
+| `piper_speak_and_play_streaming` (legacy)  | [`src/tts/README.md`](../src/tts/README.md#sequence-diagram--piper_speak_and_play_streaming)       |
+| `CommandProcessor::process` (chat fallback)| [`src/ai/README.md`](../src/ai/README.md#sequence-diagram--commandprocessorprocess)                |
+| `EnglishTutorProcessor::process` (RAG)     | [`src/learning/README.md`](../src/learning/README.md#sequence-diagram--englishtutorprocessorprocess) |
+| `PronunciationDrillProcessor::score`       | [`src/learning/pronunciation/drill/README.md`](../src/learning/pronunciation/drill/README.md#sequence-diagram--pronunciationdrillprocessorscore) |
+| `ListenerMode` state transitions (incl. `Asleep`) | [`DIAGRAMS.md` §5.1](./DIAGRAMS.md#51-mode-state-machine-with-asleep)                          |
+| Per-utterance UX cue timeline (success / abort)   | [`DIAGRAMS.md` §5.2 / §5.3](./DIAGRAMS.md#52-per-utterance-ux-cue-timeline-success-path)       |
+| Sleep / Wake cycle                         | [`DIAGRAMS.md` §5.4](./DIAGRAMS.md#54-sleep--wake-cycle)                                            |
+| Music confirm-cancel state machine         | [`DIAGRAMS.md` §5.5](./DIAGRAMS.md#55-music-confirm-cancel-state-machine)                           |
+| TTS-ducks-music gain timeline              | [`DIAGRAMS.md` §5.6](./DIAGRAMS.md#56-tts-ducks-music-gain-timeline)                                |
+| Drill ready-gate (auto-advance off)        | [`DIAGRAMS.md` §5.7](./DIAGRAMS.md#57-drill-ready-gate-auto-advance-off)                            |
+| User identification + welcome-back recap   | [`DIAGRAMS.md` §5.8](./DIAGRAMS.md#58-user-identification--welcome-back-recap)                      |
+| `UtteranceCollector` collect FSM           | [`src/voice/README.md`](../src/voice/README.md#state-diagram--utterancecollector)                  |
+| `StreamingSdlPlayer` playback FSM          | [`src/tts/README.md`](../src/tts/README.md#state-diagram--streamingsdlplayer)                      |
 
 The diagrams below cover the **gaps**: boot, cross-cutting voice-turn
 choreography, the live-mic TTS barge-in path, and music streaming with
@@ -156,7 +159,7 @@ sequenceDiagram
     Note right of TTS: see Diagram 3 for barge-in,<br>tts/README.md for legacy
     opt drill mode and PronunciationFeedback
         Lst->>Drl: drill_announce_cb (next target sentence)
-        Note right of Drl: gated by HECQUIN_DRILL_AUTO_ADVANCE —<br>see UX_FLOW.md §5.7
+        Note right of Drl: gated by HECQUIN_DRILL_AUTO_ADVANCE —<br>see [`DIAGRAMS.md`](./DIAGRAMS.md) §5.7
     end
 ```
 
@@ -277,7 +280,7 @@ sequenceDiagram
                     Lst->>FX: on_cancel()
                     alt HECQUIN_CONFIRM_CANCEL=1 (Tier-3 #12)
                         FX->>Barge: tts_speak_begin(confirm_duck_gain, 80)
-                        Note over FX: arm window — see UX_FLOW.md §5.5<br>2nd MusicCancel inside window proceeds
+                        Note over FX: arm window — see [`DIAGRAMS.md`](./DIAGRAMS.md) §5.5<br>2nd MusicCancel inside window proceeds
                         FX-->>Lst: confirm_pending_=true
                         Lst-->>R: speak override "Stop the music?"
                     else default (snappy)
@@ -304,7 +307,7 @@ sequenceDiagram
                 else assistant TTS reply (Tier-1 #3)
                     Lst->>FX: on_tts_speak_begin()
                     FX->>Barge: tts_speak_begin(duck_gain, ramp_ms)
-                    Note over Player: music ducks 1.0 → 0.20 over 80 ms<br>(see UX_FLOW.md §5.6)
+                    Note over Player: music ducks 1.0 → 0.20 over 80 ms<br>(see [`DIAGRAMS.md`](./DIAGRAMS.md) §5.6)
                     Lst-->>Lst: speak reply
                     Lst->>FX: on_tts_speak_end()
                     FX->>Barge: tts_speak_end(ramp_ms)
@@ -323,17 +326,17 @@ sequenceDiagram
 ## How the diagrams connect
 
 - **(1) Boot** ends at `Lst.run()` — enter the loop in
-  [`voice/README.md`](./src/voice/README.md#sequence-diagram--voicelistenerrun-loop).
+  [`voice/README.md`](../src/voice/README.md#sequence-diagram--voicelistenerrun-loop).
   The optional welcome-back recap and capability summary fire just
   before `run()`; the per-user identification side-channel is detailed
-  in [`UX_FLOW.md` §5.8](./UX_FLOW.md#58-user-identification--welcome-back-recap).
+  in [`DIAGRAMS.md` §5.8](./DIAGRAMS.md#58-user-identification--welcome-back-recap).
 - The loop's accepted-utterance branch enters **(2)** here.
 - **(2)** dispatches into one of the per-handler diagrams listed in the
   index, then back into the side-effect lane and **(3)**.  The wake
   gate, thinking earcon, and mode-indicator cues are layered into
-  **(2)** above; their state machine is in [`UX_FLOW.md` §5.1–5.4](./UX_FLOW.md#5-diagrams).
+  **(2)** above; their state machine is in [`DIAGRAMS.md` §5.1–5.4](./DIAGRAMS.md#51-mode-state-machine-with-asleep).
 - **(2)** entering Music mode expands into **(4)**.
 - `MusicSideEffects.on_*` calls in **(4)** are the same hooks invoked
   from `apply_local_intent_side_effects_` in **(2)**.  The opt-in
-  confirm-cancel path is detailed in [`UX_FLOW.md` §5.5](./UX_FLOW.md#55-music-confirm-cancel-state-machine);
-  the TTS-ducks-music gain ramp lives in [`UX_FLOW.md` §5.6](./UX_FLOW.md#56-tts-ducks-music-gain-timeline).
+  confirm-cancel path is detailed in [`DIAGRAMS.md` §5.5](./DIAGRAMS.md#55-music-confirm-cancel-state-machine);
+  the TTS-ducks-music gain ramp lives in [`DIAGRAMS.md` §5.6](./DIAGRAMS.md#56-tts-ducks-music-gain-timeline).
