@@ -37,7 +37,7 @@ void buffered_callback(void* userdata, Uint8* stream, int len) {
 
 } // namespace
 
-bool play_mono_22k(const std::vector<std::int16_t>& samples) {
+bool play_mono_int16_sdl(const std::vector<std::int16_t>& samples) {
     if (!ensure_audio_init()) {
         return false;
     }

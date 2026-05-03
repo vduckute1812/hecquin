@@ -31,8 +31,8 @@ bool piper_synthesize_to_buffer(const std::string& text,
                                         sample_rate_out);
 }
 
-bool sdl_play_s16_mono_22k(const std::vector<int16_t>& samples) {
-    return hecquin::tts::playback::play_mono_22k(samples);
+bool sdl_play_s16_mono(const std::vector<int16_t>& samples) {
+    return hecquin::tts::playback::play_mono_int16_sdl(samples);
 }
 
 bool piper_speak_and_play(const std::string& text,

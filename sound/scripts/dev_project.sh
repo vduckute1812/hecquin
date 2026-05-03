@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 
-jobs_count() {
-  nproc 2>/dev/null || sysctl -n hw.ncpu
-}
+SCRIPT_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=scripts/_lib.sh
+source "$SCRIPT_LIB_DIR/_lib.sh"
 
 cmd_deps() {
   echo "Installing dependencies..."
@@ -89,6 +89,22 @@ cmd_env_clean() {
   rm -rf "$ROOT_DIR/build/$target"
   rm -rf "$ROOT_DIR/.env/$target"
   echo "✅ Cleaned: build/$target and .env/$target"
+}
+
+cmd_test() {
+  local pattern="${1:-}"
+  if [[ ! -d "$PROJECT_BUILD_DIR" ]]; then
+    echo "No build directory at $PROJECT_BUILD_DIR — run ./dev.sh build first."
+    exit 1
+  fi
+  (
+    cd "$PROJECT_BUILD_DIR"
+    if [[ -n "$pattern" ]]; then
+      ctest --output-on-failure --timeout 120 -R "$pattern"
+    else
+      ctest --output-on-failure --timeout 120
+    fi
+  )
 }
 
 cmd_curriculum_fetch() {

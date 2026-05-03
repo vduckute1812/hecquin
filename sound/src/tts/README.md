@@ -24,7 +24,7 @@ single-responsibility files.
 ## Who calls what
 
 - `voice/TtsResponsePlayer` — `piper_speak_and_play_streaming` for assistant / tutor replies.
-- `learning/pronunciation/drill/DrillReferenceAudio` — `piper_synthesize_to_buffer` (needs raw PCM to compute pitch contour) + `sdl_play_s16_mono_22k`.
+- `learning/pronunciation/drill/DrillReferenceAudio` — `piper_synthesize_to_buffer` (needs raw PCM to compute pitch contour) + `sdl_play_s16_mono`.
 - `cli/TextToSpeech.cpp` — `piper_speak_and_play` (plus WAV-write path).
 
 ## Tests
@@ -92,7 +92,7 @@ classDiagram
     }
     class BufferedSdlPlayer {
         <<free>>
-        +play_mono_22k(samples) bool
+        +play_mono_int16_sdl(samples) bool
     }
     class WavReader {
         <<free>>

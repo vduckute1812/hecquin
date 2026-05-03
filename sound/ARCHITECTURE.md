@@ -607,7 +607,7 @@ piper_speak_and_play_streaming(text, model):
              WAV on stdout                                            (fallback)
          (c) legacy `echo "text" | piper --output_file /tmp/...wav` shell pipe
              (retained for environments where stdin mode is unavailable)
-    2. sdl_play_s16_mono_22k_streaming(pcm_producer)
+    2. streaming Piper pipe → SDL (fallback to buffered `sdl_play_s16_mono`)
            — opens SDL2 playback device at 22050 Hz if not already open
            — producer/consumer ring: playback starts as soon as the first
              chunk arrives, so long replies don't stall the mic re-open

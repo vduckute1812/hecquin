@@ -14,6 +14,16 @@ set -euo pipefail
 REPO_ROOT="$(git rev-parse --show-toplevel)"
 cd "$REPO_ROOT"
 
+# Never commit a populated local API config (requires `git add -f` because
+# `.env/` is ignored — this catches accidental force-adds).
+mapfile -t STAGED_SECRET_CFG < <(git diff --cached --name-only --diff-filter=ACM \
+    | grep -E '^sound/\.env/config\.env$' || true)
+if [[ ${#STAGED_SECRET_CFG[@]} -gt 0 ]]; then
+  echo "pre-commit: refusing to commit sound/.env/config.env — keep secrets local;" >&2
+  echo "            copy sound/config.env.example and use an untracked config.env." >&2
+  exit 1
+fi
+
 if ! command -v clang-format >/dev/null 2>&1; then
     echo "pre-commit: clang-format not found — skipping format check." >&2
     exit 0

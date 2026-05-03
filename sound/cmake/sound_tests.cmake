@@ -214,6 +214,12 @@ hecquin_add_unit_test(hecquin_sound_test_wav_reader
 target_link_libraries(hecquin_sound_test_wav_reader PRIVATE
     hecquin_piper_speech)
 
+# PlayPipeline.hpp constexpr planners — streaming fallback vs clean stream.
+hecquin_add_unit_test(hecquin_sound_test_play_pipeline_decisions
+    ${HECQUIN_SOUND_TEST_SRC_ROOT}/tts/test_play_pipeline_decisions.cpp)
+target_link_libraries(hecquin_sound_test_play_pipeline_decisions PRIVATE
+    hecquin_piper_speech)
+
 # PcmRingQueue cv-backed drain signalling — no SDL needed, runs the
 # queue in isolation with two producers + one drainer.
 hecquin_add_unit_test(hecquin_sound_test_pcm_ring_queue

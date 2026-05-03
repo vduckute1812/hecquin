@@ -35,7 +35,7 @@ bool piper_synthesize_to_buffer(const std::string& text,
  * Play mono int16 audio at Piper's sample rate via SDL default output device.
  * Does not call SDL_Quit. Safe if SDL audio was already initialized (e.g. capture running elsewhere).
  */
-bool sdl_play_s16_mono_22k(const std::vector<int16_t>& samples);
+bool sdl_play_s16_mono(const std::vector<int16_t>& samples);
 
 /** Synthesize → load → play → delete temp file. Returns false if any step fails. */
 bool piper_speak_and_play(const std::string& text, const std::string& model_path);

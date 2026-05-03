@@ -341,6 +341,33 @@ void VoiceListener::maybe_announce_drill_(ActionKind action_kind) {
     }
 }
 
+void VoiceListener::route_gated_utterance_(
+    hecquin::voice::CollectedUtterance& utt,
+    hecquin::voice::UtteranceRouter& router,
+    const hecquin::voice::WakeWordGate::Decision& decision) {
+    // Thinking earcon fires after cfg_.thinking_earcon_delay_ms so fast
+    // local routes skip it; slow LLM paths get a soft pulse. Scheduler
+    // is reused across turns (no per-utterance thread).
+    const int thinking_delay_ms = cfg_.thinking_earcon_delay_ms;
+    if (thinking_delay_ms > 0) {
+        thinking_scheduler_->arm(
+            std::chrono::milliseconds(thinking_delay_ms),
+            [this] { earcons_.start_thinking(); });
+    }
+
+    const auto routed =
+        router.route(Utterance{decision.transcript, utt.pcm});
+
+    if (thinking_delay_ms > 0) {
+        thinking_scheduler_->cancel();
+        earcons_.stop_thinking(); // idempotent if start never fired
+    }
+
+    handle_routed_(routed.action);
+    maybe_announce_drill_(routed.action.kind);
+    std::cout << std::endl;
+}
+
 void VoiceListener::process_utterance_(
     hecquin::voice::CollectedUtterance& utt,
     hecquin::voice::UtteranceRouter& router) {
@@ -348,58 +375,22 @@ void VoiceListener::process_utterance_(
 
     const std::string transcript = transcribe_and_emit_(utt);
     if (!transcript.empty()) {
-        // Wake-word / push-to-talk gate.  In `Always` mode this is a
-        // no-op pass-through; in `WakeWord` mode the gate strips the
-        // wake phrase so the downstream router sees just the command.
-        const auto decision = wake_gate_.decide(transcript);
+        const auto d = wake_gate_.decide(transcript);
 
         if (mode_ == ListenerMode::Asleep) {
-            // While asleep, only the wake gate's verdict matters: any
-            // other transcript is dropped silently (still cheaper than
-            // running the LLM and saying "I'm sleeping").
-            if (decision.route) {
-                // Construct a synthesised wake action so the listener
-                // exits Asleep through the normal side-effect path.
-                Action wake_action;
-                wake_action.kind = ActionKind::Wake;
-                wake_action.reply = "I'm here.";
-                wake_action.transcript = decision.transcript;
-                handle_routed_(wake_action);
+            if (d.route) {
+                Action wake{};
+                wake.kind = ActionKind::Wake;
+                wake.reply = "I'm here.";
+                wake.transcript = d.transcript;
+                handle_routed_(wake);
             } else {
                 std::cout << "😴 (sleeping; ignored)\n" << std::endl;
             }
-        } else if (!decision.route) {
-            std::cout << "🤫 (no wake phrase; ignored)\n" << std::endl;
+        } else if (d.route) {
+            route_gated_utterance_(utt, router, d);
         } else {
-            Utterance utterance{decision.transcript, utt.pcm};
-
-            // Latency-masking thinking earcon: scheduled at +N ms
-            // (see `cfg_.thinking_earcon_delay_ms`) so a fast
-            // local-intent / cached-answer route never plays it, but a
-            // slow LLM round-trip (Gemini Flash-Lite tail latency,
-            // retries) gets a soft "still working" pulse.  The
-            // scheduler is shared across utterances so we don't pay
-            // for thread creation on every turn.
-            const int thinking_delay_ms = cfg_.thinking_earcon_delay_ms;
-            if (thinking_delay_ms > 0) {
-                thinking_scheduler_->arm(
-                    std::chrono::milliseconds(thinking_delay_ms),
-                    [this] { earcons_.start_thinking(); });
-            }
-
-            const auto routed = router.route(utterance);
-
-            if (thinking_delay_ms > 0) {
-                thinking_scheduler_->cancel();
-                // stop_thinking is idempotent — calling it whether or
-                // not the start_thinking actually fired keeps the
-                // earcon module's "currently looping" state correct.
-                earcons_.stop_thinking();
-            }
-
-            handle_routed_(routed.action);
-            maybe_announce_drill_(routed.action.kind);
-            std::cout << std::endl;
+            std::cout << "🤫 (no wake phrase; ignored)\n" << std::endl;
         }
     }
 

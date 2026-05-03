@@ -228,6 +228,11 @@ private:
      */
     void process_utterance_(hecquin::voice::CollectedUtterance& utt,
                             hecquin::voice::UtteranceRouter& router);
+    /** Wake gate passed: thinking earcon (optional), router, reply + drill announce. */
+    void route_gated_utterance_(
+        hecquin::voice::CollectedUtterance& utt,
+        hecquin::voice::UtteranceRouter& router,
+        const hecquin::voice::WakeWordGate::Decision& decision);
     /**
      * Run the secondary VAD gate; on reject, log + emit telemetry +
      * clean the capture buffer and pause briefly.  Returns true when

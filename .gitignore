@@ -1,4 +1,6 @@
 .env/
+# Explicit local secrets file (parent `.env/` is ignored; this documents intent).
+sound/.env/config.env
 build/
 .idea
 *.mp3

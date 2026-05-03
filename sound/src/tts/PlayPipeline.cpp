@@ -44,7 +44,7 @@ bool speak_and_play(const std::string& text, const std::string& model_path) {
     std::cout << "📊 Loaded " << samples.size() << " samples ("
               << static_cast<float>(samples.size()) / kPiperSampleRate
               << " s)" << std::endl;
-    return sdl_play_s16_mono_22k(samples);
+    return sdl_play_s16_mono(samples);
 }
 
 bool speak_and_play_streaming(const std::string& text,

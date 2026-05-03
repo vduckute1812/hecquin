@@ -53,6 +53,7 @@ Usage:
   ./dev.sh piper:install
   ./dev.sh piper:download-model [voice]
   ./dev.sh build
+  ./dev.sh test [ctest-regex]    Run ctest in the platform build dir (same flags as CI)
   ./dev.sh run <target> [args...]
   ./dev.sh transcribe <wav-file>        Transcribe a WAV via whisper.cpp
   ./dev.sh speak "text to speak"
@@ -110,6 +111,7 @@ case "$cmd" in
   piper:install) cmd_piper_install ;;
   piper:download-model) cmd_piper_download_model "$arg" ;;
   build) cmd_build ;;
+  test) cmd_test "${2:-}" ;;
   run) cmd_run "$@" ;;
   transcribe) cmd_transcribe "$@" ;;
   speak) cmd_speak "$@" ;;

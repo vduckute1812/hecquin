@@ -50,7 +50,7 @@ prosody::PitchContour DrillReferenceAudio::announce(const std::string& text) {
         // config keeps any sample-rate-dependent tuning in sync.
         piper_tracker_ = prosody::PitchTracker(hit->tracker_cfg);
         const auto contour = hit->contour;
-        sdl_play_s16_mono_22k(hit->pcm);
+        sdl_play_s16_mono(hit->pcm);
         return contour;
     }
 
@@ -80,7 +80,7 @@ prosody::PitchContour DrillReferenceAudio::announce(const std::string& text) {
 
     // Replay through SDL — reuses the same int16 path as piper_speak_and_play
     // but avoids re-synthesising.
-    sdl_play_s16_mono_22k(samples);
+    sdl_play_s16_mono(samples);
     return contour;
 }
 

@@ -121,7 +121,7 @@ void Earcons::play(Cue c) {
     if (!enabled_.load(std::memory_order_acquire)) return;
     const auto& pcm = pcm_for_(c);
     if (pcm.empty()) return;
-    (void)hecquin::tts::playback::play_mono_22k(pcm);
+    (void)hecquin::tts::playback::play_mono_int16_sdl(pcm);
 }
 
 void Earcons::play_async(Cue c) {
